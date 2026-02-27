@@ -86,7 +86,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 class PanFirewallCoordinator(DataUpdateCoordinator):
-    """Coordinator that fetches rules + all metrics at the user-defined interval."""
+    """Coordinator that fetches rules + all metrics with robust XML parsing."""
 
     def __init__(self, hass: HomeAssistant, fw, vsys: str, scan_interval: int):
         super().__init__(
@@ -103,62 +103,113 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
         def fetch_all():
             data = {}
 
-            # Security rules
-            if self.rulebase is None:
-                self.rulebase = panos.policies.Rulebase()
-                self.fw.add(self.rulebase)
-            rules = panos.policies.SecurityRule.refreshall(self.rulebase)
-            data["rules"] = {rule.name: rule for rule in rules}
+            # ==================== SECURITY RULES ====================
+            try:
+                if self.rulebase is None:
+                    self.rulebase = panos.policies.Rulebase()
+                    self.fw.add(self.rulebase)
+                rules = panos.policies.SecurityRule.refreshall(self.rulebase)
+                data["rules"] = {rule.name: rule for rule in rules}
+            except Exception as e:
+                _LOGGER.error("Failed to fetch rules: %s", e)
+                data["rules"] = {}
 
-            # Dataplane CPU
+            # ==================== DATAPLANE CPU ====================
             try:
                 root = self.fw.op('<show><running><resource-monitor><second></second></resource-monitor></running></show>')
-                cores = [float(elem.text) for elem in root.iter() if elem.tag.startswith('core') and elem.text and elem.text.replace('.', '', 1).isdigit() and float(elem.text) > 0]
+                cores = []
+                for elem in root.iter():
+                    if "core" in elem.tag.lower() and elem.text and elem.text.replace(".", "", 1).replace("-", "", 1).isdigit():
+                        val = float(elem.text)
+                        if val > 0:  # ignore management cores (0%)
+                            cores.append(val)
                 data["dataplane_cpu"] = round(sum(cores) / len(cores), 1) if cores else 0.0
-            except Exception:
+                _LOGGER.debug("DP CPU: %s%% (found %d active cores)", data["dataplane_cpu"], len(cores))
+            except Exception as e:
+                _LOGGER.debug("DP CPU fetch failed: %s", e)
                 data["dataplane_cpu"] = None
 
-            # System info — EVERY element as individual sensor
+            # ==================== SYSTEM INFO (all fields) ====================
             try:
                 root = self.fw.op('<show><system><info></info></system></show>')
                 sys_dict = {}
-                for elem in root.findall('.//'):
-                    if elem.text and elem.text.strip():
-                        key = elem.tag.replace('-', '_')
+                for elem in root.iter():
+                    if elem.text and elem.text.strip() and not elem.tag.startswith('{'):
+                        key = elem.tag.replace("-", "_").replace(":", "_")
                         sys_dict[key] = elem.text.strip()
                 data["system_info"] = sys_dict
-            except Exception:
+                _LOGGER.debug("System info fields found: %d", len(sys_dict))
+            except Exception as e:
+                _LOGGER.debug("System info fetch failed: %s", e)
                 data["system_info"] = {}
 
-            # Session info
+            # ==================== SESSION INFO (concurrent, CPS, throughput) ====================
             try:
                 root = self.fw.op('<show><session><info></info></session></show>')
-                data["concurrent_connections"] = int(root.findtext('.//number-of-active-sessions', '0'))
-                data["connections_per_second"] = int(root.findtext('.//new-connection-establish-rate', '0').split()[0])
-                data["total_throughput_kbps"] = int(root.findtext('.//throughput', '0').split()[0])
-            except Exception:
+                # Concurrent connections
+                active = root.find(".//number-of-active-sessions") or root.find(".//active-sessions")
+                data["concurrent_connections"] = int(active.text) if active is not None and active.text else 0
+
+                # Connections per second
+                cps_elem = root.find(".//new-connection-establish-rate") or root.find(".//cps")
+                if cps_elem is not None and cps_elem.text:
+                    data["connections_per_second"] = int("".join(filter(str.isdigit, cps_elem.text.split()[0])))
+                else:
+                    data["connections_per_second"] = 0
+
+                # Total throughput (kbps → we convert to Mbps in sensor)
+                tp_elem = root.find(".//throughput") or root.find(".//kbps")
+                if tp_elem is not None and tp_elem.text:
+                    data["total_throughput_kbps"] = int("".join(filter(str.isdigit, tp_elem.text.split()[0])))
+                else:
+                    data["total_throughput_kbps"] = 0
+
+                _LOGGER.debug("Sessions: %s concurrent, %s cps, %s kbps",
+                              data["concurrent_connections"], data["connections_per_second"], data["total_throughput_kbps"])
+            except Exception as e:
+                _LOGGER.debug("Session info failed: %s", e)
                 data["concurrent_connections"] = data["connections_per_second"] = data["total_throughput_kbps"] = 0
 
-            # Management plane CPU
+            # ==================== MANAGEMENT PLANE CPU ====================
             try:
                 root = self.fw.op('<show><system><resources></resources></system></show>')
-                mp_text = root.findtext('.//cpu', '0')
-                data["management_cpu"] = int(mp_text.rstrip('%')) if '%' in mp_text else int(mp_text)
-            except Exception:
+                cpu_text = None
+                for elem in root.iter():
+                    if "cpu" in elem.tag.lower() and elem.text:
+                        cpu_text = elem.text
+                        break
+                if cpu_text:
+                    data["management_cpu"] = int(cpu_text.rstrip("%")) if "%" in cpu_text else int(cpu_text)
+                else:
+                    data["management_cpu"] = 0
+                _LOGGER.debug("Management CPU: %s%%", data["management_cpu"])
+            except Exception as e:
+                _LOGGER.debug("Management CPU failed: %s", e)
                 data["management_cpu"] = None
 
-            # Routes & BGP
+            # ==================== NUMBER OF ROUTES ====================
             try:
                 root = self.fw.op('<show><routing><route></route></routing></show>')
-                data["number_of_routes"] = len(root.findall('.//entry'))
+                data["number_of_routes"] = len(root.findall(".//entry"))
             except Exception:
-                data["number_of_routes"] = 0
+                try:
+                    root = self.fw.op('<show><advanced-routing><route></route></advanced-routing></show>')
+                    data["number_of_routes"] = len(root.findall(".//entry"))
+                except Exception:
+                    data["number_of_routes"] = 0
+            _LOGGER.debug("Routes: %s", data["number_of_routes"])
 
+            # ==================== BGP PEERS ====================
             try:
                 root = self.fw.op('<show><routing><protocol><bgp><peer></peer></bgp></protocol></routing></show>')
-                data["bgp_peers"] = len(root.findall('.//entry'))
+                data["bgp_peers"] = len(root.findall(".//entry"))
             except Exception:
-                data["bgp_peers"] = 0
+                try:
+                    root = self.fw.op('<show><advanced-routing><bgp><peer><summary></summary></peer></bgp></advanced-routing></show>')
+                    data["bgp_peers"] = len(root.findall(".//entry"))
+                except Exception:
+                    data["bgp_peers"] = 0
+            _LOGGER.debug("BGP peers: %s", data["bgp_peers"])
 
             return data
 
