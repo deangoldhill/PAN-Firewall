@@ -6,10 +6,22 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+
 import panos.firewall
 import panos.policies
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    CONF_HOST,
+    CONF_PORT,
+    CONF_USERNAME,
+    CONF_PASSWORD,
+    CONF_VSYS,
+    CONF_VERIFY_SSL,
+    DEFAULT_PORT,
+    DEFAULT_VSYS,
+    DEFAULT_VERIFY_SSL,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +38,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         verify=entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
     )
 
-    coordinator = PanFirewallCoordinator(hass, fw, entry.data.get(CONF_VSYS, DEFAULT_VSYS))
+    coordinator = PanFirewallCoordinator(
+        hass, fw, entry.data.get(CONF_VSYS, DEFAULT_VSYS)
+    )
 
     await coordinator.async_config_entry_first_refresh()
 
