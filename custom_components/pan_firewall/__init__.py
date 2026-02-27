@@ -38,26 +38,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         verify=entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
     )
 
-    # Fetch serial + model + version (required for Device Registry)
+    # Official way — returns SystemInfo object with .serial, .version, .model/.platform etc.
     def refresh_system():
-        fw.refresh_system_info()
+        system_info = fw.refresh_system_info()
         return {
-            "serial": getattr(fw, "serial", None),
-            "model": getattr(fw, "model", None),
-            "version": getattr(fw, "version", None),
+            "serial": getattr(fw, "serial", None)
+                      or getattr(system_info, "serial", None)
+                      or entry.data[CONF_HOST],
+            "model": getattr(system_info, "model", None)
+                     or getattr(system_info, "platform", None)
+                     or "PAN-OS Firewall",
+            "version": getattr(system_info, "version", None),
         }
 
     try:
         info = await hass.async_add_executor_job(refresh_system)
-        serial = info["serial"] or entry.data[CONF_HOST]
+        serial = info["serial"]
         _LOGGER.info(
             "✅ Connected to PAN firewall %s (model: %s, version: %s)",
             serial, info["model"], info["version"]
         )
     except Exception as err:
-        _LOGGER.warning("Could not fetch system info, using hostname: %s", err)
+        _LOGGER.warning("Could not fetch full system info: %s. Falling back to hostname.", err)
         serial = entry.data[CONF_HOST]
-        info = {"model": None, "version": None}
+        info = {"model": "PAN-OS Firewall", "version": "Unknown"}
 
     coordinator = PanFirewallCoordinator(
         hass, fw, entry.data.get(CONF_VSYS, DEFAULT_VSYS)
@@ -78,6 +82,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
@@ -99,6 +104,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
         self.rulebase = None
 
     async def _async_update_data(self):
+        """Fetch all security rules."""
         def fetch_rules():
             if self.rulebase is None:
                 self.rulebase = panos.policies.Rulebase()
