@@ -20,7 +20,9 @@ async def async_setup_entry(
     version = data["version"]
 
     entities = []
-    for rule_name in coordinator.data.keys():
+
+    # Only create switches from the actual rules (new structure)
+    for rule_name in coordinator.data.get("rules", {}).keys():
         entities.append(
             PanFirewallRuleSwitch(
                 coordinator=coordinator,
@@ -38,13 +40,13 @@ async def async_setup_entry(
 class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
     """Representation of a PAN Firewall rule switch."""
 
-    def __init__(self, coordinator, rule_name: str, fw, serial: str, model: str | None, version: str | None):
+    def __init__(self, coordinator, rule_name: str, fw, serial: str, model: str, version: str):
         super().__init__(coordinator)
         self._rule_name = rule_name
         self._fw = fw
         self._serial = serial
-        self._model = model or "PAN-OS Firewall"
-        self._version = version or "Unknown"
+        self._model = model
+        self._version = version
 
         self._attr_name = rule_name
         self._attr_unique_id = f"pan_{serial}_{rule_name}".lower().replace(" ", "_").replace("/", "_")
@@ -54,7 +56,6 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def device_info(self):
-        """All rules appear under one clean PAN Firewall device."""
         return dr.DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
             name=f"PAN Firewall {self._serial}",
@@ -67,8 +68,7 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return true if the rule is enabled."""
-        rule = self.coordinator.data.get(self._rule_name)
+        rule = self.coordinator.data.get("rules", {}).get(self._rule_name)
         return rule is not None and not getattr(rule, "disabled", False)
 
     async def async_turn_on(self, **kwargs):
@@ -78,13 +78,13 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
         await self._set_disabled(True)
 
     async def _set_disabled(self, disabled: bool):
-        """Enable/disable + commit using official API."""
+        """Enable/disable rule + commit."""
         def set_and_commit():
-            rule = self.coordinator.data.get(self._rule_name)
+            rule = self.coordinator.data.get("rules", {}).get(self._rule_name)
             if rule is None:
                 raise ValueError(f"Rule '{self._rule_name}' not found")
             rule.disabled = disabled
-            rule.apply()                    # Official, correct method
+            rule.apply()
             self._fw.commit(sync=True)
             return True
 
