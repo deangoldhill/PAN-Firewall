@@ -38,6 +38,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         verify=entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
     )
 
+    # 🔥 IMPORTANT: This populates fw.serial
+    def refresh_system():
+        fw.refresh_system_info()
+        return fw.serial
+
+    try:
+        serial = await hass.async_add_executor_job(refresh_system)
+        _LOGGER.info("Connected to PAN firewall serial: %s", serial)
+    except Exception as err:
+        _LOGGER.warning("Could not fetch serial number (using hostname as fallback): %s", err)
+        serial = None
+
     coordinator = PanFirewallCoordinator(
         hass, fw, entry.data.get(CONF_VSYS, DEFAULT_VSYS)
     )
@@ -47,6 +59,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "coordinator": coordinator,
         "fw": fw,
+        "serial": serial or entry.data[CONF_HOST],  # fallback for unique_id
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
