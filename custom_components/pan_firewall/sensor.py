@@ -1,6 +1,6 @@
 """Sensor platform for PAN Firewall metrics."""
 
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -20,13 +20,13 @@ async def async_setup_entry(
 
     entities = []
 
-    # Numeric metrics (CPU, sessions, throughput, etc.)
+    # Numeric metrics (using string device_class for full compatibility)
     metrics = {
-        "dataplane_cpu": ("Dataplane CPU", "%", SensorDeviceClass.PERCENTAGE, SensorStateClass.MEASUREMENT),
-        "management_cpu": ("Management CPU", "%", SensorDeviceClass.PERCENTAGE, SensorStateClass.MEASUREMENT),
+        "dataplane_cpu": ("Dataplane CPU", "%", "percentage", SensorStateClass.MEASUREMENT),
+        "management_cpu": ("Management CPU", "%", "percentage", SensorStateClass.MEASUREMENT),
         "concurrent_connections": ("Concurrent Connections", "sessions", None, SensorStateClass.MEASUREMENT),
         "connections_per_second": ("Connections per Second", "cps", None, SensorStateClass.MEASUREMENT),
-        "total_throughput_kbps": ("Total Throughput", "Mbps", SensorDeviceClass.DATA_RATE, SensorStateClass.MEASUREMENT),
+        "total_throughput_kbps": ("Total Throughput", "Mbps", "data_rate", SensorStateClass.MEASUREMENT),
         "number_of_routes": ("Number of Routes", "routes", None, SensorStateClass.TOTAL),
         "bgp_peers": ("BGP Peers", "peers", None, SensorStateClass.TOTAL),
     }
@@ -47,7 +47,7 @@ async def async_setup_entry(
             )
         )
 
-    # One sensor per field from <show><system><info/></system></show>
+    # One sensor for EVERY field from <show><system><info/></system></show>
     for key in coordinator.data.get("system_info", {}):
         entities.append(
             PanFirewallSystemFieldSensor(
@@ -64,9 +64,9 @@ async def async_setup_entry(
 
 
 class PanFirewallSensor(CoordinatorEntity, SensorEntity):
-    """Generic numeric sensor."""
+    """Generic numeric sensor (CPU, sessions, throughput, etc.)."""
 
-    def __init__(self, coordinator, key: str, name: str, unit: str | None, device_class, state_class, serial, model, version, fw):
+    def __init__(self, coordinator, key: str, name: str, unit: str | None, device_class: str | None, state_class, serial, model, version, fw):
         super().__init__(coordinator)
         self._key = key
         self._attr_name = name
@@ -84,7 +84,7 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         val = self.coordinator.data.get(self._key)
         if self._key == "total_throughput_kbps" and val is not None:
-            return round(val / 1000, 1)   # Kbps → Mbps
+            return round(val / 1000, 1)  # Kbps → Mbps
         return val
 
     @property
@@ -101,7 +101,7 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
 
 
 class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
-    """One sensor for each field from show system info."""
+    """One sensor for each field returned by show system info."""
 
     def __init__(self, coordinator, key: str, serial, model, version, fw):
         super().__init__(coordinator)
