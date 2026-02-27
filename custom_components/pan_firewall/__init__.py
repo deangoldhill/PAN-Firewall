@@ -1,4 +1,4 @@
-"""PAN Firewall integration."""
+"""PAN Firewall integration - DIAGNOSTIC VERSION with full XML logging."""
 
 from datetime import timedelta
 import logging
@@ -32,7 +32,6 @@ PLATFORMS = ["switch", "sensor"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up PAN Firewall from a config entry."""
     fw = panos.firewall.Firewall(
         hostname=entry.data[CONF_HOST],
         api_username=entry.data[CONF_USERNAME],
@@ -86,8 +85,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 class PanFirewallCoordinator(DataUpdateCoordinator):
-    """Coordinator that fetches rules + all metrics with robust XML parsing."""
-
     def __init__(self, hass: HomeAssistant, fw, vsys: str, scan_interval: int):
         super().__init__(
             hass,
@@ -98,6 +95,14 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
         self.fw = fw
         self.vsys = vsys
         self.rulebase = None
+
+    def _log_raw_xml(self, cmd: str, root):
+        """Log raw XML for debugging."""
+        try:
+            xml_str = ET.tostring(root, encoding="unicode", method="xml")
+            _LOGGER.info("🔍 RAW XML for '%s' (first 800 chars): %s", cmd, xml_str[:800])
+        except Exception:
+            _LOGGER.info("🔍 RAW XML for '%s' failed to stringify", cmd)
 
     async def _async_update_data(self):
         def fetch_all():
@@ -110,106 +115,97 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                     self.fw.add(self.rulebase)
                 rules = panos.policies.SecurityRule.refreshall(self.rulebase)
                 data["rules"] = {rule.name: rule for rule in rules}
+                _LOGGER.info("✅ Rules loaded: %d rules", len(data["rules"]))
             except Exception as e:
-                _LOGGER.error("Failed to fetch rules: %s", e)
+                _LOGGER.error("Rules failed: %s", e)
                 data["rules"] = {}
 
             # ==================== DATAPLANE CPU ====================
+            cmd = '<show><running><resource-monitor><second></second></resource-monitor></running></show>'
             try:
-                root = self.fw.op('<show><running><resource-monitor><second></second></resource-monitor></running></show>')
+                root = self.fw.op(cmd)
+                self._log_raw_xml("resource-monitor", root)
                 cores = []
                 for elem in root.iter():
                     if "core" in elem.tag.lower() and elem.text and elem.text.replace(".", "", 1).replace("-", "", 1).isdigit():
                         val = float(elem.text)
-                        if val > 0:  # ignore management cores (0%)
+                        if val > 0:
                             cores.append(val)
                 data["dataplane_cpu"] = round(sum(cores) / len(cores), 1) if cores else 0.0
-                _LOGGER.debug("DP CPU: %s%% (found %d active cores)", data["dataplane_cpu"], len(cores))
+                _LOGGER.info("✅ Dataplane CPU = %s%% (%d active cores)", data["dataplane_cpu"], len(cores))
             except Exception as e:
-                _LOGGER.debug("DP CPU fetch failed: %s", e)
+                _LOGGER.error("DP CPU failed: %s", e)
                 data["dataplane_cpu"] = None
 
-            # ==================== SYSTEM INFO (all fields) ====================
+            # ==================== SYSTEM INFO ====================
+            cmd = '<show><system><info></info></system></show>'
             try:
-                root = self.fw.op('<show><system><info></info></system></show>')
+                root = self.fw.op(cmd)
+                self._log_raw_xml("system info", root)
                 sys_dict = {}
                 for elem in root.iter():
-                    if elem.text and elem.text.strip() and not elem.tag.startswith('{'):
+                    if elem.text and elem.text.strip() and not elem.tag.startswith("{"):
                         key = elem.tag.replace("-", "_").replace(":", "_")
                         sys_dict[key] = elem.text.strip()
                 data["system_info"] = sys_dict
-                _LOGGER.debug("System info fields found: %d", len(sys_dict))
+                _LOGGER.info("✅ System info fields loaded: %d", len(sys_dict))
             except Exception as e:
-                _LOGGER.debug("System info fetch failed: %s", e)
+                _LOGGER.error("System info failed: %s", e)
                 data["system_info"] = {}
 
-            # ==================== SESSION INFO (concurrent, CPS, throughput) ====================
+            # ==================== SESSION INFO ====================
+            cmd = '<show><session><info></info></session></show>'
             try:
-                root = self.fw.op('<show><session><info></info></session></show>')
-                # Concurrent connections
+                root = self.fw.op(cmd)
+                self._log_raw_xml("session info", root)
+                # Robust deep search
                 active = root.find(".//number-of-active-sessions") or root.find(".//active-sessions")
                 data["concurrent_connections"] = int(active.text) if active is not None and active.text else 0
 
-                # Connections per second
                 cps_elem = root.find(".//new-connection-establish-rate") or root.find(".//cps")
-                if cps_elem is not None and cps_elem.text:
-                    data["connections_per_second"] = int("".join(filter(str.isdigit, cps_elem.text.split()[0])))
-                else:
-                    data["connections_per_second"] = 0
+                data["connections_per_second"] = int("".join(filter(str.isdigit, (cps_elem.text or "0").split()[0]))) if cps_elem is not None else 0
 
-                # Total throughput (kbps → we convert to Mbps in sensor)
                 tp_elem = root.find(".//throughput") or root.find(".//kbps")
-                if tp_elem is not None and tp_elem.text:
-                    data["total_throughput_kbps"] = int("".join(filter(str.isdigit, tp_elem.text.split()[0])))
-                else:
-                    data["total_throughput_kbps"] = 0
+                data["total_throughput_kbps"] = int("".join(filter(str.isdigit, (tp_elem.text or "0").split()[0]))) if tp_elem is not None else 0
 
-                _LOGGER.debug("Sessions: %s concurrent, %s cps, %s kbps",
-                              data["concurrent_connections"], data["connections_per_second"], data["total_throughput_kbps"])
+                _LOGGER.info("✅ Sessions: %s concurrent | %s cps | %s kbps",
+                             data["concurrent_connections"], data["connections_per_second"], data["total_throughput_kbps"])
             except Exception as e:
-                _LOGGER.debug("Session info failed: %s", e)
+                _LOGGER.error("Session info failed: %s", e)
                 data["concurrent_connections"] = data["connections_per_second"] = data["total_throughput_kbps"] = 0
 
-            # ==================== MANAGEMENT PLANE CPU ====================
+            # ==================== MANAGEMENT CPU ====================
+            cmd = '<show><system><resources></resources></system></show>'
             try:
-                root = self.fw.op('<show><system><resources></resources></system></show>')
+                root = self.fw.op(cmd)
+                self._log_raw_xml("system resources", root)
                 cpu_text = None
                 for elem in root.iter():
                     if "cpu" in elem.tag.lower() and elem.text:
                         cpu_text = elem.text
                         break
-                if cpu_text:
-                    data["management_cpu"] = int(cpu_text.rstrip("%")) if "%" in cpu_text else int(cpu_text)
-                else:
-                    data["management_cpu"] = 0
-                _LOGGER.debug("Management CPU: %s%%", data["management_cpu"])
+                data["management_cpu"] = int(cpu_text.rstrip("%")) if cpu_text and "%" in cpu_text else int(cpu_text or 0)
+                _LOGGER.info("✅ Management CPU = %s%%", data["management_cpu"])
             except Exception as e:
-                _LOGGER.debug("Management CPU failed: %s", e)
+                _LOGGER.error("Management CPU failed: %s", e)
                 data["management_cpu"] = None
 
-            # ==================== NUMBER OF ROUTES ====================
+            # ==================== ROUTES & BGP (kept as-is, with logs) ====================
             try:
                 root = self.fw.op('<show><routing><route></route></routing></show>')
+                self._log_raw_xml("routing route", root)
                 data["number_of_routes"] = len(root.findall(".//entry"))
-            except Exception:
-                try:
-                    root = self.fw.op('<show><advanced-routing><route></route></advanced-routing></show>')
-                    data["number_of_routes"] = len(root.findall(".//entry"))
-                except Exception:
-                    data["number_of_routes"] = 0
-            _LOGGER.debug("Routes: %s", data["number_of_routes"])
+            except:
+                data["number_of_routes"] = 0
+            _LOGGER.info("✅ Routes = %s", data["number_of_routes"])
 
-            # ==================== BGP PEERS ====================
             try:
                 root = self.fw.op('<show><routing><protocol><bgp><peer></peer></bgp></protocol></routing></show>')
+                self._log_raw_xml("bgp peer", root)
                 data["bgp_peers"] = len(root.findall(".//entry"))
-            except Exception:
-                try:
-                    root = self.fw.op('<show><advanced-routing><bgp><peer><summary></summary></peer></bgp></advanced-routing></show>')
-                    data["bgp_peers"] = len(root.findall(".//entry"))
-                except Exception:
-                    data["bgp_peers"] = 0
-            _LOGGER.debug("BGP peers: %s", data["bgp_peers"])
+            except:
+                data["bgp_peers"] = 0
+            _LOGGER.info("✅ BGP peers = %s", data["bgp_peers"])
 
             return data
 
