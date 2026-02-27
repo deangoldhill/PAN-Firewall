@@ -22,6 +22,8 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_VSYS,
     DEFAULT_VERIFY_SSL,
+    CONF_SCAN_INTERVAL,
+    DEFAULT_SCAN_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,7 +58,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         serial = entry.data[CONF_HOST]
         info = {"model": "PAN-OS Firewall", "version": "Unknown"}
 
-    coordinator = PanFirewallCoordinator(hass, fw, entry.data.get(CONF_VSYS, DEFAULT_VSYS))
+    scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+
+    coordinator = PanFirewallCoordinator(
+        hass, fw, entry.data.get(CONF_VSYS, DEFAULT_VSYS), scan_interval
+    )
 
     await coordinator.async_config_entry_first_refresh()
 
@@ -80,90 +86,79 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 class PanFirewallCoordinator(DataUpdateCoordinator):
-    """Coordinator that fetches rules + all new sensor metrics."""
+    """Coordinator that fetches rules + all metrics at the user-defined interval."""
 
-    def __init__(self, hass: HomeAssistant, fw, vsys: str):
+    def __init__(self, hass: HomeAssistant, fw, vsys: str, scan_interval: int):
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=30),  # Faster refresh for metrics (was 300s)
+            update_interval=timedelta(seconds=scan_interval),
         )
         self.fw = fw
         self.vsys = vsys
         self.rulebase = None
 
     async def _async_update_data(self):
-        """Fetch rules + all metrics in one job."""
         def fetch_all():
             data = {}
 
-            # 1. Security rules (existing)
+            # Security rules
             if self.rulebase is None:
                 self.rulebase = panos.policies.Rulebase()
                 self.fw.add(self.rulebase)
             rules = panos.policies.SecurityRule.refreshall(self.rulebase)
             data["rules"] = {rule.name: rule for rule in rules}
 
-            # 2. Dataplane CPU (user-specified command)
+            # Dataplane CPU
             try:
                 root = self.fw.op('<show><running><resource-monitor><second></second></resource-monitor></running></show>')
-                cores = []
-                for elem in root.iter():
-                    if elem.tag.startswith('core') and elem.text and elem.text.replace('.', '', 1).isdigit():
-                        val = float(elem.text)
-                        if val > 0:
-                            cores.append(val)
+                cores = [float(elem.text) for elem in root.iter() if elem.tag.startswith('core') and elem.text and elem.text.replace('.', '', 1).isdigit() and float(elem.text) > 0]
                 data["dataplane_cpu"] = round(sum(cores) / len(cores), 1) if cores else 0.0
-            except Exception as e:
-                _LOGGER.warning("DP CPU fetch failed: %s", e)
+            except Exception:
                 data["dataplane_cpu"] = None
 
-            # 3. System info (ALL elements as dict)
+            # System info — EVERY element as individual sensor
             try:
                 root = self.fw.op('<show><system><info></info></system></show>')
-                sys_dict = {child.tag: child.text.strip() if child.text else "" for child in root.findall('.//')}
+                sys_dict = {}
+                for elem in root.findall('.//'):
+                    if elem.text and elem.text.strip():
+                        key = elem.tag.replace('-', '_')
+                        sys_dict[key] = elem.text.strip()
                 data["system_info"] = sys_dict
-            except Exception as e:
-                _LOGGER.warning("System info fetch failed: %s", e)
+            except Exception:
                 data["system_info"] = {}
 
-            # 4. Session info (concurrent + CPS + throughput)
+            # Session info
             try:
                 root = self.fw.op('<show><session><info></info></session></show>')
                 data["concurrent_connections"] = int(root.findtext('.//number-of-active-sessions', '0'))
                 data["connections_per_second"] = int(root.findtext('.//new-connection-establish-rate', '0').split()[0])
                 data["total_throughput_kbps"] = int(root.findtext('.//throughput', '0').split()[0])
             except Exception:
-                data["concurrent_connections"] = 0
-                data["connections_per_second"] = 0
-                data["total_throughput_kbps"] = 0
+                data["concurrent_connections"] = data["connections_per_second"] = data["total_throughput_kbps"] = 0
 
-            # 5. Management plane CPU
+            # Management plane CPU
             try:
                 root = self.fw.op('<show><system><resources></resources></system></show>')
-                mp_cpu_text = root.findtext('.//cpu', '0')
-                data["management_cpu"] = int(mp_cpu_text.rstrip('%')) if '%' in mp_cpu_text else int(mp_cpu_text)
+                mp_text = root.findtext('.//cpu', '0')
+                data["management_cpu"] = int(mp_text.rstrip('%')) if '%' in mp_text else int(mp_text)
             except Exception:
                 data["management_cpu"] = None
 
-            # 6. Number of routes
+            # Routes & BGP
             try:
                 root = self.fw.op('<show><routing><route></route></routing></show>')
                 data["number_of_routes"] = len(root.findall('.//entry'))
             except Exception:
                 data["number_of_routes"] = 0
 
-            # 7. BGP peers (works on both legacy and advanced-routing)
             try:
                 root = self.fw.op('<show><routing><protocol><bgp><peer></peer></bgp></protocol></routing></show>')
                 data["bgp_peers"] = len(root.findall('.//entry'))
             except Exception:
-                try:
-                    root = self.fw.op('<show><advanced-routing><bgp><peer><summary></summary></peer></bgp></advanced-routing></show>')
-                    data["bgp_peers"] = len(root.findall('.//entry'))
-                except Exception:
-                    data["bgp_peers"] = 0
+                data["bgp_peers"] = 0
 
             return data
 
