@@ -20,7 +20,7 @@ async def async_setup_entry(
 
     entities = []
 
-    # Numeric metrics
+    # Numeric metrics (CPU, sessions, throughput, etc.)
     metrics = {
         "dataplane_cpu": ("Dataplane CPU", "%", SensorDeviceClass.PERCENTAGE, SensorStateClass.MEASUREMENT),
         "management_cpu": ("Management CPU", "%", SensorDeviceClass.PERCENTAGE, SensorStateClass.MEASUREMENT),
@@ -47,7 +47,7 @@ async def async_setup_entry(
             )
         )
 
-    # ONE SENSOR PER SYSTEM-INFO FIELD (exactly as requested)
+    # One sensor per field from <show><system><info/></system></show>
     for key in coordinator.data.get("system_info", {}):
         entities.append(
             PanFirewallSystemFieldSensor(
@@ -83,8 +83,8 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         val = self.coordinator.data.get(self._key)
-        if self._key == "total_throughput_kbps":
-            return round(val / 1000, 1) if val else 0
+        if self._key == "total_throughput_kbps" and val is not None:
+            return round(val / 1000, 1)   # Kbps → Mbps
         return val
 
     @property
@@ -101,7 +101,7 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
 
 
 class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
-    """One sensor for each field from <show><system><info/></system></show>."""
+    """One sensor for each field from show system info."""
 
     def __init__(self, coordinator, key: str, serial, model, version, fw):
         super().__init__(coordinator)
