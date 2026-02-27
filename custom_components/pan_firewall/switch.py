@@ -16,6 +16,8 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
+    model = data["model"]
+    version = data["version"]
 
     entities = []
     for rule_name in coordinator.data.keys():
@@ -25,6 +27,8 @@ async def async_setup_entry(
                 rule_name=rule_name,
                 fw=data["fw"],
                 serial=serial,
+                model=model,
+                version=version,
             )
         )
 
@@ -34,11 +38,13 @@ async def async_setup_entry(
 class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
     """Representation of a PAN Firewall rule switch."""
 
-    def __init__(self, coordinator, rule_name: str, fw, serial: str):
+    def __init__(self, coordinator, rule_name: str, fw, serial: str, model: str | None, version: str | None):
         super().__init__(coordinator)
         self._rule_name = rule_name
         self._fw = fw
         self._serial = serial
+        self._model = model or "PAN-OS Firewall"
+        self._version = version or "Unknown"
 
         self._attr_name = rule_name
         self._attr_unique_id = f"pan_{serial}_{rule_name}".lower().replace(" ", "_").replace("/", "_")
@@ -48,19 +54,20 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def device_info(self):
-        """Return device info so all rules appear under one PAN Firewall device."""
+        """All rules appear under one clean PAN Firewall device."""
         return dr.DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
             name=f"PAN Firewall {self._serial}",
             manufacturer="Palo Alto Networks",
-            model=self._fw.model,
-            sw_version=self._fw.version,
+            model=self._model,
+            sw_version=self._version,
             configuration_url=f"https://{self._fw.hostname}",
             entry_type=dr.DeviceEntryType.SERVICE,
         )
 
     @property
     def is_on(self) -> bool:
+        """Return true if the rule is enabled."""
         rule = self.coordinator.data.get(self._rule_name)
         return rule is not None and not getattr(rule, "disabled", False)
 
@@ -71,15 +78,14 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
         await self._set_disabled(True)
 
     async def _set_disabled(self, disabled: bool):
-        """Enable/disable rule + commit (official API way)."""
+        """Enable/disable + commit using official API."""
         def set_and_commit():
             rule = self.coordinator.data.get(self._rule_name)
             if rule is None:
                 raise ValueError(f"Rule '{self._rule_name}' not found")
-
             rule.disabled = disabled
-            rule.apply()                    # ← Official way (replaces broken update())
-            self._fw.commit(sync=True)      # Commit immediately
+            rule.apply()                    # Official, correct method
+            self._fw.commit(sync=True)
             return True
 
         await self.hass.async_add_executor_job(set_and_commit)
