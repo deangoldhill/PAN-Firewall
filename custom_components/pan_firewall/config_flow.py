@@ -16,6 +16,9 @@ from .const import (
     DEFAULT_PORT,
     CONF_VERIFY_SSL,
     DEFAULT_VERIFY_SSL,
+    CONF_SCAN_INTERVAL,
+    DEFAULT_SCAN_INTERVAL,
+    MIN_SCAN_INTERVAL,
 )
 
 class PanFirewallConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -49,6 +52,9 @@ class PanFirewallConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_PASSWORD): str,
                 vol.Optional(CONF_VSYS, default=DEFAULT_VSYS): str,
                 vol.Optional(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): bool,
+                vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(
+                    vol.Coerce(int), vol.Range(min=MIN_SCAN_INTERVAL)
+                ),
             }
         )
 
@@ -57,17 +63,14 @@ class PanFirewallConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def _validate_connection(self, data: dict):
-        """Validate the user input allows us to connect."""
         def test_connection():
             fw = panos.firewall.Firewall(
                 hostname=data[CONF_HOST],
                 api_username=data[CONF_USERNAME],
                 api_password=data[CONF_PASSWORD],
                 port=data.get(CONF_PORT, DEFAULT_PORT),
-                api_key=None,  # let SDK generate
                 verify=data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
             )
-            # Force a connection and fetch rules to validate
             rulebase = fw.add(panos.policies.Rulebase())
             panos.policies.SecurityRule.refreshall(rulebase)
             return fw
