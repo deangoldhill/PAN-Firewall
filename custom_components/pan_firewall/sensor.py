@@ -20,7 +20,7 @@ async def async_setup_entry(
 
     entities = []
 
-    # Dynamic sensors from coordinator data
+    # Numeric metrics
     metrics = {
         "dataplane_cpu": ("Dataplane CPU", "%", SensorDeviceClass.PERCENTAGE, SensorStateClass.MEASUREMENT),
         "management_cpu": ("Management CPU", "%", SensorDeviceClass.PERCENTAGE, SensorStateClass.MEASUREMENT),
@@ -47,22 +47,24 @@ async def async_setup_entry(
             )
         )
 
-    # System Info sensor (all fields as attributes)
-    entities.append(
-        PanFirewallSystemInfoSensor(
-            coordinator=coordinator,
-            serial=serial,
-            model=model,
-            version=version,
-            fw=data["fw"],
+    # ONE SENSOR PER SYSTEM-INFO FIELD (exactly as requested)
+    for key in coordinator.data.get("system_info", {}):
+        entities.append(
+            PanFirewallSystemFieldSensor(
+                coordinator=coordinator,
+                key=key,
+                serial=serial,
+                model=model,
+                version=version,
+                fw=data["fw"],
+            )
         )
-    )
 
     async_add_entities(entities, update_before_add=True)
 
 
 class PanFirewallSensor(CoordinatorEntity, SensorEntity):
-    """Generic sensor for numeric metrics."""
+    """Generic numeric sensor."""
 
     def __init__(self, coordinator, key: str, name: str, unit: str | None, device_class, state_class, serial, model, version, fw):
         super().__init__(coordinator)
@@ -80,9 +82,10 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
+        val = self.coordinator.data.get(self._key)
         if self._key == "total_throughput_kbps":
-            return round(self.coordinator.data.get(self._key, 0) / 1000, 1)  # Kbps → Mbps
-        return self.coordinator.data.get(self._key)
+            return round(val / 1000, 1) if val else 0
+        return val
 
     @property
     def device_info(self):
@@ -97,13 +100,14 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
         )
 
 
-class PanFirewallSystemInfoSensor(CoordinatorEntity, SensorEntity):
-    """Single sensor showing ALL system info fields as attributes."""
+class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
+    """One sensor for each field from <show><system><info/></system></show>."""
 
-    def __init__(self, coordinator, serial, model, version, fw):
+    def __init__(self, coordinator, key: str, serial, model, version, fw):
         super().__init__(coordinator)
-        self._attr_name = "System Info"
-        self._attr_unique_id = f"pan_{serial}_system_info"
+        self._key = key
+        self._attr_name = key.replace('_', ' ').title()
+        self._attr_unique_id = f"pan_{serial}_sys_{key}"
         self._attr_icon = "mdi:information"
         self._serial = serial
         self._model = model
@@ -112,11 +116,7 @@ class PanFirewallSystemInfoSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return "OK"  # Always "OK", real data in attributes
-
-    @property
-    def extra_state_attributes(self):
-        return self.coordinator.data.get("system_info", {})
+        return self.coordinator.data.get("system_info", {}).get(self._key)
 
     @property
     def device_info(self):
