@@ -21,18 +21,47 @@ async def async_setup_entry(
 
     entities = []
 
-    # Only create switches from the actual rules (new structure)
-    for rule_name in coordinator.data.get("rules", {}).keys():
-        entities.append(
-            PanFirewallRuleSwitch(
-                coordinator=coordinator,
-                rule_name=rule_name,
-                fw=data["fw"],
-                serial=serial,
-                model=model,
-                version=version,
-            )
+    # Security rules
+    for rule_name in coordinator.data.get("security_rules", {}):
+        switch = PanFirewallRuleSwitch(
+            coordinator=coordinator,
+            rule_name=rule_name,
+            rule_type="security",
+            fw=data["fw"],
+            serial=serial,
+            model=model,
+            version=version,
         )
+        switch._attr_entity_registry_enabled_default = False
+        entities.append(switch)
+
+    # NAT rules
+    for rule_name in coordinator.data.get("nat_rules", {}):
+        switch = PanFirewallRuleSwitch(
+            coordinator=coordinator,
+            rule_name=rule_name,
+            rule_type="nat",
+            fw=data["fw"],
+            serial=serial,
+            model=model,
+            version=version,
+        )
+        switch._attr_entity_registry_enabled_default = False
+        entities.append(switch)
+
+    # Decryption rules
+    for rule_name in coordinator.data.get("decryption_rules", {}):
+        switch = PanFirewallRuleSwitch(
+            coordinator=coordinator,
+            rule_name=rule_name,
+            rule_type="decryption",
+            fw=data["fw"],
+            serial=serial,
+            model=model,
+            version=version,
+        )
+        switch._attr_entity_registry_enabled_default = False
+        entities.append(switch)
 
     async_add_entities(entities, update_before_add=True)
 
@@ -40,20 +69,19 @@ async def async_setup_entry(
 class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
     """Representation of a PAN Firewall rule switch."""
 
-    def __init__(self, coordinator, rule_name: str, fw, serial: str, model: str, version: str):
+    def __init__(self, coordinator, rule_name: str, rule_type: str, fw, serial: str, model: str, version: str):
         super().__init__(coordinator)
-        self._attr_entity_registry_enabled_default = False
         self._rule_name = rule_name
+        self._rule_type = rule_type
         self._fw = fw
         self._serial = serial
-        self._model = model
-        self._version = version
 
-        self._attr_name = rule_name
-        self._attr_unique_id = f"pan_{serial}_{rule_name}".lower().replace(" ", "_").replace("/", "_")
+        self._attr_name = f"{rule_type.title()} Rule: {rule_name}"
+        self._attr_unique_id = f"pan_{serial}_{rule_type}_{rule_name}".lower().replace(" ", "_").replace("/", "_")
         self._attr_icon = "mdi:shield-lock"
         self._attr_device_class = "switch"
         self._attr_has_entity_name = True
+        self._attr_entity_registry_enabled_default = False   # Disabled by default
 
     @property
     def device_info(self):
@@ -69,7 +97,8 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        rule = self.coordinator.data.get("rules", {}).get(self._rule_name)
+        rules_key = f"{self._rule_type}_rules"
+        rule = self.coordinator.data.get(rules_key, {}).get(self._rule_name)
         return rule is not None and not getattr(rule, "disabled", False)
 
     async def async_turn_on(self, **kwargs):
@@ -79,11 +108,11 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
         await self._set_disabled(True)
 
     async def _set_disabled(self, disabled: bool):
-        """Enable/disable rule + commit."""
         def set_and_commit():
-            rule = self.coordinator.data.get("rules", {}).get(self._rule_name)
+            rules_key = f"{self._rule_type}_rules"
+            rule = self.coordinator.data.get(rules_key, {}).get(self._rule_name)
             if rule is None:
-                raise ValueError(f"Rule '{self._rule_name}' not found")
+                raise ValueError(f"{self._rule_type.title()} rule '{self._rule_name}' not found")
             rule.disabled = disabled
             rule.apply()
             self._fw.commit(sync=True)
