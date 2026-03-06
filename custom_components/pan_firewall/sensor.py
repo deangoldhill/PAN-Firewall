@@ -54,18 +54,6 @@ async def async_setup_entry(
         PanFirewallRuleCountSensor(coordinator, "decryption_rules", "Decryption Rules Total", serial, model, version, data["fw"]),
     ])
 
-    # DHCP Leases Total sensor
-    entities.append(
-        PanFirewallDHCPLeasesSensor(
-            coordinator=coordinator,
-            name="DHCP Leases Total",
-            serial=serial,
-            model=model,
-            version=version,
-            fw=data["fw"],
-        )
-    )
-
     # System info fields
     system_info = coordinator.data.get("system_info", {})
 
@@ -185,35 +173,6 @@ class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         return len(self.coordinator.data.get(self._rule_type, {}))
-
-    @property
-    def device_info(self):
-        return dr.DeviceInfo(
-            identifiers={(DOMAIN, self._serial)},
-            name=f"PAN Firewall {self._serial}",
-            manufacturer="Palo Alto Networks",
-            model=self._model,
-            sw_version=self._version,
-            configuration_url=f"https://{self._fw.hostname}",
-            entry_type=dr.DeviceEntryType.SERVICE,
-        )
-
-
-class PanFirewallDHCPLeasesSensor(CoordinatorEntity, SensorEntity):
-    def __init__(self, coordinator, name: str, serial, model, version, fw):
-        super().__init__(coordinator)
-        self._attr_name = name
-        self._attr_unique_id = f"pan_{serial}_dhcp_leases_total"
-        self._attr_icon = "mdi:counter"
-        self._attr_state_class = SensorStateClass.TOTAL
-        self._serial = serial
-        self._model = model
-        self._version = version
-        self._fw = fw
-
-    @property
-    def native_value(self):
-        return self.coordinator.data.get("dhcp_leases_total", 0)
 
     @property
     def device_info(self):
