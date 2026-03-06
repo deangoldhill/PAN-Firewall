@@ -1,4 +1,4 @@
-"""PAN Firewall integration — v1.2.7 (fixed MP CPU, DP CPU avg, BGP peers count + attribute)."""
+"""PAN Firewall integration."""
 
 from datetime import timedelta
 import logging
@@ -52,7 +52,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         info = await hass.async_add_executor_job(refresh_system)
         serial = info["serial"]
-        _LOGGER.info("✅ Connected to PAN firewall %s (model: %s, version: %s)", serial, info["model"], info["version"])
+        _LOGGER.info("Connected to PAN firewall %s (model: %s, version: %s)", serial, info["model"], info["version"])
     except Exception as err:
         _LOGGER.warning("Could not fetch system info: %s", err)
         serial = entry.data[CONF_HOST]
@@ -86,6 +86,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 class PanFirewallCoordinator(DataUpdateCoordinator):
+    """Coordinator that fetches all rule types and metrics."""
+
     def __init__(self, hass: HomeAssistant, fw, vsys: str, scan_interval: int):
         super().__init__(
             hass,
@@ -95,24 +97,48 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
         )
         self.fw = fw
         self.vsys = vsys
-        self.rulebase = None
+        self.security_rulebase = None
+        self.nat_rulebase = None
+        self.decryption_rulebase = None
 
     async def _async_update_data(self):
         def fetch_all():
             data = {}
 
-            # Rules (unchanged)
+            # Security rules
             try:
-                if self.rulebase is None:
-                    self.rulebase = panos.policies.Rulebase()
-                    self.fw.add(self.rulebase)
-                rules = panos.policies.SecurityRule.refreshall(self.rulebase)
-                data["rules"] = {rule.name: rule for rule in rules}
+                if self.security_rulebase is None:
+                    self.security_rulebase = panos.policies.Rulebase()
+                    self.fw.add(self.security_rulebase)
+                security_rules = panos.policies.SecurityRule.refreshall(self.security_rulebase)
+                data["security_rules"] = {rule.name: rule for rule in security_rules}
             except Exception as e:
-                _LOGGER.error("Rules failed: %s", e)
-                data["rules"] = {}
+                _LOGGER.error("Security rules fetch failed: %s", e)
+                data["security_rules"] = {}
 
-            # Dataplane CPU: sum non-zero group utilizations (better average for your setup)
+            # NAT rules
+            try:
+                if self.nat_rulebase is None:
+                    self.nat_rulebase = panos.policies.NatRulebase()
+                    self.fw.add(self.nat_rulebase)
+                nat_rules = panos.policies.NatRule.refreshall(self.nat_rulebase)
+                data["nat_rules"] = {rule.name: rule for rule in nat_rules}
+            except Exception as e:
+                _LOGGER.error("NAT rules fetch failed: %s", e)
+                data["nat_rules"] = {}
+
+            # Decryption rules
+            try:
+                if self.decryption_rulebase is None:
+                    self.decryption_rulebase = panos.policies.DecryptionRulebase()
+                    self.fw.add(self.decryption_rulebase)
+                decryption_rules = panos.policies.DecryptionRule.refreshall(self.decryption_rulebase)
+                data["decryption_rules"] = {rule.name: rule for rule in decryption_rules}
+            except Exception as e:
+                _LOGGER.error("Decryption rules fetch failed: %s", e)
+                data["decryption_rules"] = {}
+
+            # Other metrics (unchanged from previous working version)
             try:
                 root = self.fw.op("show running resource-monitor second")
                 total_util = 0.0
@@ -131,7 +157,6 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Dataplane CPU failed: %s", e)
                 data["dataplane_cpu"] = None
 
-            # System info (unchanged - works)
             try:
                 root = self.fw.op("show system info")
                 sys_dict = {}
@@ -144,7 +169,6 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("System info failed: %s", e)
                 data["system_info"] = {}
 
-            # Session info (exact tags from your XML)
             try:
                 root = self.fw.op("show session info")
                 data["concurrent_connections"] = int(root.findtext('.//num-active') or 0)
@@ -154,10 +178,9 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Session info failed: %s", e)
                 data["concurrent_connections"] = data["connections_per_second"] = data["total_throughput_kbps"] = 0
 
-            # Management CPU: parse %Cpu(s) line from top output
             try:
                 root = self.fw.op("show system resources")
-                text = root.findtext('.') or ""  # whole result text
+                text = root.findtext('.') or ""
                 match = re.search(r'%Cpu\(s\):\s*([\d.]+)\s*us,\s*([\d.]+)\s*sy', text)
                 if match:
                     us = float(match.group(1))
@@ -169,30 +192,12 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Management CPU failed: %s", e)
                 data["management_cpu"] = None
 
-            # Number of routes (unchanged - works)
             try:
                 root = self.fw.op("show routing route")
                 data["number_of_routes"] = len(root.findall('.//entry'))
             except Exception as e:
                 _LOGGER.error("Routes failed: %s", e)
                 data["number_of_routes"] = 0
-
-            # BGP peers: count <entry> (peers), add routes_received attr
-            try:
-                root = self.fw.op("show routing protocol bgp peer")
-                peers = root.findall('.//entry')
-                data["bgp_peers"] = len(peers)
-
-                total_routes_received = 0
-                for peer in peers:
-                    incoming = peer.findtext('.//incoming-total')
-                    if incoming:
-                        total_routes_received += int(incoming)
-                data["bgp_routes_received"] = total_routes_received  # extra for attribute
-            except Exception as e:
-                _LOGGER.error("BGP peers failed: %s", e)
-                data["bgp_peers"] = 0
-                data["bgp_routes_received"] = 0
 
             return data
 
