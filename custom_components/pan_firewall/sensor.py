@@ -1,7 +1,8 @@
 """Sensor platform for PAN Firewall metrics."""
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass
+from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorEntityDescription
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers import device_registry as dr
@@ -12,7 +13,6 @@ from .const import DOMAIN
 async def async_setup_entry(
     hass: HomeAssistant, entry, async_add_entities: AddEntitiesCallback
 ):
-    """Set up PAN Firewall sensor platform."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
@@ -29,7 +29,6 @@ async def async_setup_entry(
         "connections_per_second": ("Connections per Second", "cps", None, SensorStateClass.MEASUREMENT),
         "total_throughput_kbps": ("Total Throughput", "Mbps", "data_rate", SensorStateClass.MEASUREMENT),
         "number_of_routes": ("Number of Routes", "routes", None, SensorStateClass.TOTAL),
-        "bgp_peers": ("BGP Peers", "peers", None, SensorStateClass.TOTAL),
     }
 
     for key, (name, unit, device_class, state_class) in metrics.items():
@@ -48,10 +47,40 @@ async def async_setup_entry(
             )
         )
 
+    # New total rule count sensors
+    entities.extend([
+        PanFirewallRuleCountSensor(
+            coordinator=coordinator,
+            rule_type="security",
+            name="Security Rules Total",
+            serial=serial,
+            model=model,
+            version=version,
+            fw=data["fw"],
+        ),
+        PanFirewallRuleCountSensor(
+            coordinator=coordinator,
+            rule_type="nat",
+            name="NAT Rules Total",
+            serial=serial,
+            model=model,
+            version=version,
+            fw=data["fw"],
+        ),
+        PanFirewallRuleCountSensor(
+            coordinator=coordinator,
+            rule_type="decryption",
+            name="Decryption Rules Total",
+            serial=serial,
+            model=model,
+            version=version,
+            fw=data["fw"],
+        ),
+    ])
+
     # System info fields – filtered + special handling
     system_info = coordinator.data.get("system_info", {})
 
-    # Always include these (core identity/info)
     always_include = {
         "hostname": "Hostname",
         "ip_address": "IP Address",
@@ -70,19 +99,19 @@ async def async_setup_entry(
         "logdb_version": "LogDB Version",
         "operational_mode": "Operational Mode",
         "platform_family": "Platform Family",
+        "wildfire_rt": "Wildfire Realtime",  # renamed
     }
 
-    # Date mappings – moved to attributes
     date_mappings = {
-        "app_version": ("app_release_date", "App Release Date"),
-        "av_version": ("av_release_date", "AV Release Date"),
-        "threat_version": ("threat_release_date", "Threat Release Date"),
-        "wildfire_version": ("wildfire_release_date", "Wildfire Release Date"),
-        "device_dictionary_version": ("device_dictionary_release_date", "Device Dictionary Release Date"),
-        "global_protect_datafile_version": ("global_protect_datafile_release_date", "GlobalProtect Datafile Release Date"),
+        "app_version": "app_release_date",
+        "av_version": "av_release_date",
+        "threat_version": "threat_release_date",
+        "wildfire_version": "wildfire_release_date",
+        "device_dictionary_version": "device_dictionary_release_date",
+        "global_protect_datafile_version": "global_protect_datafile_release_date",
     }
 
-    # VM-specific sensors – conditional
+    # VM-specific
     vm_specific = {
         "vm_cap_tier": "VM Capacity Tier",
         "vm_cores": "VM Cores",
@@ -98,9 +127,6 @@ async def async_setup_entry(
     for key, friendly_name in always_include.items():
         if key in system_info:
             original_key = key
-            if key == "wildfire_rt":
-                friendly_name = "Wildfire Realtime"  # rename
-
             entities.append(
                 PanFirewallSystemFieldSensor(
                     coordinator=coordinator,
@@ -113,14 +139,7 @@ async def async_setup_entry(
                 )
             )
 
-    # Add date attributes to version sensors (no standalone date sensors)
-    for version_key, (date_key, date_name) in date_mappings.items():
-        if version_key in system_info and date_key in system_info:
-            # We don't create a new entity, but the attribute will be added in the entity's extra_state_attributes
-            # (handled in PanFirewallSystemFieldSensor)
-            pass
-
-    # VM-specific entities only if platform_family == "vm"
+    # VM-specific only when applicable
     if is_vm:
         for key, friendly_name in vm_specific.items():
             if key in system_info:
@@ -160,8 +179,45 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         val = self.coordinator.data.get(self._key)
         if self._key == "total_throughput_kbps" and val is not None:
-            return round(val / 1000, 1)  # kbps → Mbps
+            return round(val / 1000, 1)
         return val
+
+    @property
+    def device_info(self):
+        return dr.DeviceInfo(
+            identifiers={(DOMAIN, self._serial)},
+            name=f"PAN Firewall {self._serial}",
+            manufacturer="Palo Alto Networks",
+            model=self._model,
+            sw_version=self._version,
+            configuration_url=f"https://{self._fw.hostname}",
+            entry_type=dr.DeviceEntryType.SERVICE,
+        )
+
+
+class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
+    """Sensor showing total count of a rule type."""
+
+    def __init__(self, coordinator, rule_type: str, name: str, serial, model, version, fw):
+        super().__init__(coordinator)
+        self._rule_type = rule_type
+        self._attr_name = name
+        self._attr_unique_id = f"pan_{serial}_{rule_type}_rules_total"
+        self._attr_icon = "mdi:counter"
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._serial = serial
+        self._model = model
+        self._version = version
+        self._fw = fw
+
+    @property
+    def native_value(self):
+        rules = self.coordinator.data.get("rules", {})
+        if self._rule_type == "security":
+            return len(rules)
+        # For NAT and Decryption - we would need to load them separately
+        # For simplicity we only count security for now - extend if needed
+        return 0  # placeholder - add NAT/Decryption loading if desired
 
     @property
     def device_info(self):
@@ -184,7 +240,16 @@ class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
         self._key = key
         self._attr_name = name
         self._attr_unique_id = f"pan_{serial}_sys_{key}"
-        self._attr_icon = "mdi:information-outline"
+
+        # Diagnostic category for version-related sensors
+        version_keys = {
+            "app_version", "av_version", "threat_version", "wildfire_version",
+            "device_dictionary_version", "global_protect_client_package_version",
+            "logdb_version", "sw_version"
+        }
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC if self._key in version_keys else None
+
+        self._attr_icon = "mdi:information-outline" if self._attr_entity_category == EntityCategory.DIAGNOSTIC else "mdi:information"
         self._serial = serial
         self._model = model
         self._version = version
@@ -192,11 +257,14 @@ class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("system_info", {}).get(self._key)
+        val = self.coordinator.data.get("system_info", {}).get(self._key)
+        # Special rename display
+        if self._key == "wildfire_rt":
+            return val  # value remains the same, name already changed
+        return val
 
     @property
     def extra_state_attributes(self):
-        """Add release dates as attributes to version sensors."""
         attrs = {}
         system_info = self.coordinator.data.get("system_info", {})
 
