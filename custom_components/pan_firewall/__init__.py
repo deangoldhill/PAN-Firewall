@@ -1,8 +1,9 @@
-"""PAN Firewall integration — v1.2.6 (parsing matched to your exact XML)."""
+"""PAN Firewall integration — v1.2.7 (fixed MP CPU, DP CPU avg, BGP peers count + attribute)."""
 
 from datetime import timedelta
 import logging
 import xml.etree.ElementTree as ET
+import re
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -100,7 +101,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
         def fetch_all():
             data = {}
 
-            # Security rules
+            # Rules (unchanged)
             try:
                 if self.rulebase is None:
                     self.rulebase = panos.policies.Rulebase()
@@ -108,27 +109,29 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 rules = panos.policies.SecurityRule.refreshall(self.rulebase)
                 data["rules"] = {rule.name: rule for rule in rules}
             except Exception as e:
-                _LOGGER.error("Rules fetch failed: %s", e)
+                _LOGGER.error("Rules failed: %s", e)
                 data["rules"] = {}
 
-            # Dataplane CPU (robust core parsing)
+            # Dataplane CPU: sum non-zero group utilizations (better average for your setup)
             try:
                 root = self.fw.op("show running resource-monitor second")
-                cores = []
+                total_util = 0.0
+                count = 0
                 for elem in root.iter():
-                    if "core" in elem.tag.lower() and elem.text:
+                    if elem.text and '%' in elem.text:
                         try:
-                            val = float(elem.text.strip())
+                            val = float(re.search(r'(\d+\.?\d*)%', elem.text).group(1))
                             if val > 0:
-                                cores.append(val)
-                        except ValueError:
+                                total_util += val
+                                count += 1
+                        except (AttributeError, ValueError):
                             pass
-                data["dataplane_cpu"] = round(sum(cores) / len(cores), 1) if cores else 0.0
+                data["dataplane_cpu"] = round(total_util / count, 1) if count > 0 else 0.0
             except Exception as e:
                 _LOGGER.error("Dataplane CPU failed: %s", e)
                 data["dataplane_cpu"] = None
 
-            # System info (direct tag parsing - matches your XML perfectly)
+            # System info (unchanged - works)
             try:
                 root = self.fw.op("show system info")
                 sys_dict = {}
@@ -141,7 +144,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("System info failed: %s", e)
                 data["system_info"] = {}
 
-            # Session info (exact tags from your XML: num-active, cps, kbps)
+            # Session info (exact tags from your XML)
             try:
                 root = self.fw.op("show session info")
                 data["concurrent_connections"] = int(root.findtext('.//num-active') or 0)
@@ -151,22 +154,22 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Session info failed: %s", e)
                 data["concurrent_connections"] = data["connections_per_second"] = data["total_throughput_kbps"] = 0
 
-            # Management CPU (parse %Cpu(s) line from top output)
+            # Management CPU: parse %Cpu(s) line from top output
             try:
                 root = self.fw.op("show system resources")
-                cpu_line = root.findtext('.//Cpu') or ""
-                if cpu_line:
-                    parts = cpu_line.split(',')
-                    us = float(parts[0].split()[0]) if len(parts) > 0 else 0
-                    sy = float(parts[1].split()[0]) if len(parts) > 1 else 0
-                    data["management_cpu"] = round(us + sy, 1)  # approx management load
+                text = root.findtext('.') or ""  # whole result text
+                match = re.search(r'%Cpu\(s\):\s*([\d.]+)\s*us,\s*([\d.]+)\s*sy', text)
+                if match:
+                    us = float(match.group(1))
+                    sy = float(match.group(2))
+                    data["management_cpu"] = round(us + sy, 1)
                 else:
-                    data["management_cpu"] = 0
+                    data["management_cpu"] = 0.0
             except Exception as e:
                 _LOGGER.error("Management CPU failed: %s", e)
                 data["management_cpu"] = None
 
-            # Number of routes (count <entry>)
+            # Number of routes (unchanged - works)
             try:
                 root = self.fw.op("show routing route")
                 data["number_of_routes"] = len(root.findall('.//entry'))
@@ -174,13 +177,22 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Routes failed: %s", e)
                 data["number_of_routes"] = 0
 
-            # BGP peers (count <entry> with status)
+            # BGP peers: count <entry> (peers), add routes_received attr
             try:
                 root = self.fw.op("show routing protocol bgp peer")
-                data["bgp_peers"] = len(root.findall('.//entry'))
+                peers = root.findall('.//entry')
+                data["bgp_peers"] = len(peers)
+
+                total_routes_received = 0
+                for peer in peers:
+                    incoming = peer.findtext('.//incoming-total')
+                    if incoming:
+                        total_routes_received += int(incoming)
+                data["bgp_routes_received"] = total_routes_received  # extra for attribute
             except Exception as e:
                 _LOGGER.error("BGP peers failed: %s", e)
                 data["bgp_peers"] = 0
+                data["bgp_routes_received"] = 0
 
             return data
 
