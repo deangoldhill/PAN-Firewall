@@ -2,9 +2,9 @@
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
@@ -51,7 +51,7 @@ async def async_setup_entry(
     entities.extend([
         PanFirewallRuleCountSensor(
             coordinator=coordinator,
-            rule_type="security",
+            rule_type="security_rules",
             name="Security Rules Total",
             serial=serial,
             model=model,
@@ -60,7 +60,7 @@ async def async_setup_entry(
         ),
         PanFirewallRuleCountSensor(
             coordinator=coordinator,
-            rule_type="nat",
+            rule_type="nat_rules",
             name="NAT Rules Total",
             serial=serial,
             model=model,
@@ -69,7 +69,7 @@ async def async_setup_entry(
         ),
         PanFirewallRuleCountSensor(
             coordinator=coordinator,
-            rule_type="decryption",
+            rule_type="decryption_rules",
             name="Decryption Rules Total",
             serial=serial,
             model=model,
@@ -199,7 +199,7 @@ class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._rule_type = rule_type
         self._attr_name = name
-        self._attr_unique_id = f"pan_{serial}_{rule_type}_rules_total"
+        self._attr_unique_id = f"pan_{serial}_{rule_type}_total"
         self._attr_icon = "mdi:counter"
         self._attr_state_class = SensorStateClass.TOTAL
         self._serial = serial
@@ -209,9 +209,7 @@ class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        key = f"{self._rule_type}_rules"
-        rules_dict = self.coordinator.data.get(key, {})
-        return len(rules_dict)
+        return len(self.coordinator.data.get(self._rule_type, {}))
 
     @property
     def device_info(self):
@@ -250,8 +248,7 @@ class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        val = self.coordinator.data.get("system_info", {}).get(self._key)
-        return val
+        return self.coordinator.data.get("system_info", {}).get(self._key)
 
     @property
     def extra_state_attributes(self):
