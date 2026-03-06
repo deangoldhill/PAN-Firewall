@@ -46,15 +46,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "serial": getattr(fw, "serial", None) or getattr(system_info, "serial", None) or entry.data[CONF_HOST],
             "model": getattr(system_info, "model", None) or getattr(system_info, "platform", None) or "PAN-OS Firewall",
             "version": getattr(system_info, "version", None),
+            "hostname": getattr(system_info, "hostname", None) or entry.data[CONF_HOST],
         }
 
     try:
         info = await hass.async_add_executor_job(refresh_system)
         serial = info["serial"]
-        _LOGGER.info("Connected to PAN firewall %s (model: %s, version: %s)", serial, info["model"], info["version"])
+        hostname = info["hostname"]
+        _LOGGER.info("Connected to PAN firewall %s (hostname: %s, model: %s, version: %s)", serial, hostname, info["model"], info["version"])
     except Exception as err:
-        _LOGGER.warning("Could not fetch system info: %s", err)
+        _LOGGER.warning("Could not fetch system info: %s - using fallback", err)
         serial = entry.data[CONF_HOST]
+        hostname = entry.data[CONF_HOST]
         info = {"model": "PAN-OS Firewall", "version": "Unknown"}
 
     scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
@@ -69,9 +72,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
         "fw": fw,
         "serial": serial,
+        "hostname": hostname,
         "model": info["model"],
         "version": info["version"],
     }
+
+    # Update entry title to hostname
+    hass.config_entries.async_update_entry(entry, title=f"{hostname}")
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
