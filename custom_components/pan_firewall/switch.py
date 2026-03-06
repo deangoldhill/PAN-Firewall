@@ -15,6 +15,7 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
+    hostname = data["hostname"]  # from coordinator setup
     model = data["model"]
     version = data["version"]
 
@@ -27,6 +28,7 @@ async def async_setup_entry(
                 rule_name=rule_name,
                 fw=data["fw"],
                 serial=serial,
+                hostname=hostname,
                 model=model,
                 version=version,
             )
@@ -36,11 +38,12 @@ async def async_setup_entry(
 
 
 class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
-    def __init__(self, coordinator, rule_name: str, fw, serial: str, model: str, version: str):
+    def __init__(self, coordinator, rule_name: str, fw, serial: str, hostname: str, model: str, version: str):
         super().__init__(coordinator)
         self._rule_name = rule_name
         self._fw = fw
         self._serial = serial
+        self._hostname = hostname
         self._model = model
         self._version = version
 
@@ -55,7 +58,7 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
     def device_info(self):
         return dr.DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
-            name=f"PAN Firewall {self._serial}",
+            name=self._hostname,  # Use hostname as device name
             manufacturer="Palo Alto Networks",
             model=self._model,
             sw_version=self._version,
