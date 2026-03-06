@@ -42,6 +42,7 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
 
     def __init__(self, coordinator, rule_name: str, fw, serial: str, model: str, version: str):
         super().__init__(coordinator)
+        self._attr_entity_registry_enabled_default = False
         self._rule_name = rule_name
         self._fw = fw
         self._serial = serial
