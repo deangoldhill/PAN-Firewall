@@ -95,46 +95,41 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
         )
         self.fw = fw
         self.vsys = vsys
-        self.security_rulebase = None
-        self.nat_rulebase = None
-        self.decryption_rulebase = None
+        self.rulebase = None
 
     async def _async_update_data(self):
         def fetch_all():
             data = {}
 
-            # Security rules
+            # Unified rulebase for security / NAT / decryption counts
             try:
-                if self.security_rulebase is None:
-                    self.security_rulebase = panos.policies.Rulebase()
-                    self.fw.add(self.security_rulebase)
-                security_rules = panos.policies.SecurityRule.refreshall(self.security_rulebase)
-                data["security_rules"] = {rule.name: rule for rule in security_rules}
-            except Exception as e:
-                _LOGGER.error("Security rules fetch failed: %s", e)
-                data["security_rules"] = {}
+                if self.rulebase is None:
+                    self.rulebase = panos.policies.Rulebase()
+                    self.fw.add(self.rulebase)
 
-            # NAT rules (count only)
-            try:
-                if self.nat_rulebase is None:
-                    self.nat_rulebase = panos.policies.NatRulebase()
-                    self.fw.add(self.nat_rulebase)
-                nat_rules = panos.policies.NatRule.refreshall(self.nat_rulebase)
-                data["nat_rules"] = {rule.name: rule for rule in nat_rules}
-            except Exception as e:
-                _LOGGER.error("NAT rules fetch failed: %s", e)
-                data["nat_rules"] = {}
+                # Load all rules (pan-os-python loads them together)
+                all_rules = panos.policies.Rule.refreshall(self.rulebase)
 
-            # Decryption rules (count only)
-            try:
-                if self.decryption_rulebase is None:
-                    self.decryption_rulebase = panos.policies.DecryptionRulebase()
-                    self.fw.add(self.decryption_rulebase)
-                decryption_rules = panos.policies.DecryptionRule.refreshall(self.decryption_rulebase)
-                data["decryption_rules"] = {rule.name: rule for rule in decryption_rules}
+                security_rules = {}
+                nat_rules = {}
+                decryption_rules = {}
+
+                for rule in all_rules:
+                    if isinstance(rule, panos.policies.SecurityRule):
+                        security_rules[rule.name] = rule
+                    elif isinstance(rule, panos.policies.NatRule):
+                        nat_rules[rule.name] = rule
+                    elif isinstance(rule, panos.policies.DecryptionRule):
+                        decryption_rules[rule.name] = rule
+
+                data["security_rules"] = security_rules
+                data["nat_rules"] = nat_rules
+                data["decryption_rules"] = decryption_rules
+
+                _LOGGER.info(f"Loaded {len(security_rules)} security, {len(nat_rules)} NAT, {len(decryption_rules)} decryption rules")
             except Exception as e:
-                _LOGGER.error("Decryption rules fetch failed: %s", e)
-                data["decryption_rules"] = {}
+                _LOGGER.error(f"Rulebase fetch failed: {e}")
+                data["security_rules"] = data["nat_rules"] = data["decryption_rules"] = {}
 
             # DHCP leases – only entries with hostname
             try:
@@ -164,7 +159,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error(f"DHCP leases fetch failed: {e}")
                 data["dhcp_leases"] = []
 
-            # Other metrics
+            # Other metrics (unchanged)
             try:
                 root = self.fw.op("show running resource-monitor second")
                 total_util = 0.0
