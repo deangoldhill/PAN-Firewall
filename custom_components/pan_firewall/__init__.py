@@ -1,8 +1,7 @@
-"""PAN Firewall integration — DIAGNOSTIC MODE (logs raw XML responses)."""
+"""PAN Firewall integration — v1.2.6 (parsing matched to your exact XML)."""
 
 from datetime import timedelta
 import logging
-
 import xml.etree.ElementTree as ET
 
 from homeassistant.config_entries import ConfigEntry
@@ -52,7 +51,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         info = await hass.async_add_executor_job(refresh_system)
         serial = info["serial"]
-        _LOGGER.info("Connected to PAN firewall %s (model: %s, version: %s)", serial, info["model"], info["version"])
+        _LOGGER.info("✅ Connected to PAN firewall %s (model: %s, version: %s)", serial, info["model"], info["version"])
     except Exception as err:
         _LOGGER.warning("Could not fetch system info: %s", err)
         serial = entry.data[CONF_HOST]
@@ -101,7 +100,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
         def fetch_all():
             data = {}
 
-            # Rules (should still work)
+            # Security rules
             try:
                 if self.rulebase is None:
                     self.rulebase = panos.policies.Rulebase()
@@ -110,37 +109,82 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 data["rules"] = {rule.name: rule for rule in rules}
             except Exception as e:
                 _LOGGER.error("Rules fetch failed: %s", e)
+                data["rules"] = {}
 
-            commands = {
-                "dataplane_cpu": "show running resource-monitor second",
-                "system_info": "show system info",
-                "session_info": "show session info",
-                "mp_cpu": "show system resources",
-                "routes": "show routing route",
-                "bgp_peers": "show routing protocol bgp peer",
-            }
+            # Dataplane CPU (robust core parsing)
+            try:
+                root = self.fw.op("show running resource-monitor second")
+                cores = []
+                for elem in root.iter():
+                    if "core" in elem.tag.lower() and elem.text:
+                        try:
+                            val = float(elem.text.strip())
+                            if val > 0:
+                                cores.append(val)
+                        except ValueError:
+                            pass
+                data["dataplane_cpu"] = round(sum(cores) / len(cores), 1) if cores else 0.0
+            except Exception as e:
+                _LOGGER.error("Dataplane CPU failed: %s", e)
+                data["dataplane_cpu"] = None
 
-            for key, cmd in commands.items():
-                try:
-                    root = self.fw.op(cmd)
-                    raw_xml = ET.tostring(root, encoding='unicode', method='xml')
-                    _LOGGER.warning("RAW XML for '%s':\n%s\n---", cmd, raw_xml[:4000])  # truncate if too long
-                except Exception as e:
-                    _LOGGER.error("Command '%s' failed: %s", cmd, e)
+            # System info (direct tag parsing - matches your XML perfectly)
+            try:
+                root = self.fw.op("show system info")
+                sys_dict = {}
+                for elem in root.iter():
+                    if elem.text and elem.text.strip():
+                        key = elem.tag.replace("-", "_")
+                        sys_dict[key] = elem.text.strip()
+                data["system_info"] = sys_dict
+            except Exception as e:
+                _LOGGER.error("System info failed: %s", e)
+                data["system_info"] = {}
 
-            # Placeholder values (we'll fix parsing after seeing XML)
-            data["dataplane_cpu"] = 0
-            data["management_cpu"] = 0
-            data["concurrent_connections"] = 0
-            data["connections_per_second"] = 0
-            data["total_throughput_kbps"] = 0
-            data["number_of_routes"] = 0
-            data["bgp_peers"] = 0
-            data["system_info"] = {}
+            # Session info (exact tags from your XML: num-active, cps, kbps)
+            try:
+                root = self.fw.op("show session info")
+                data["concurrent_connections"] = int(root.findtext('.//num-active') or 0)
+                data["connections_per_second"] = int(root.findtext('.//cps') or 0)
+                data["total_throughput_kbps"] = int(root.findtext('.//kbps') or 0)
+            except Exception as e:
+                _LOGGER.error("Session info failed: %s", e)
+                data["concurrent_connections"] = data["connections_per_second"] = data["total_throughput_kbps"] = 0
+
+            # Management CPU (parse %Cpu(s) line from top output)
+            try:
+                root = self.fw.op("show system resources")
+                cpu_line = root.findtext('.//Cpu') or ""
+                if cpu_line:
+                    parts = cpu_line.split(',')
+                    us = float(parts[0].split()[0]) if len(parts) > 0 else 0
+                    sy = float(parts[1].split()[0]) if len(parts) > 1 else 0
+                    data["management_cpu"] = round(us + sy, 1)  # approx management load
+                else:
+                    data["management_cpu"] = 0
+            except Exception as e:
+                _LOGGER.error("Management CPU failed: %s", e)
+                data["management_cpu"] = None
+
+            # Number of routes (count <entry>)
+            try:
+                root = self.fw.op("show routing route")
+                data["number_of_routes"] = len(root.findall('.//entry'))
+            except Exception as e:
+                _LOGGER.error("Routes failed: %s", e)
+                data["number_of_routes"] = 0
+
+            # BGP peers (count <entry> with status)
+            try:
+                root = self.fw.op("show routing protocol bgp peer")
+                data["bgp_peers"] = len(root.findall('.//entry'))
+            except Exception as e:
+                _LOGGER.error("BGP peers failed: %s", e)
+                data["bgp_peers"] = 0
 
             return data
 
         try:
             return await self.hass.async_add_executor_job(fetch_all)
         except Exception as err:
-            raise UpdateFailed(f"Fetch error: {err}") from err
+            raise UpdateFailed(f"Error fetching firewall data: {err}") from err
