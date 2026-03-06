@@ -33,7 +33,6 @@ PLATFORMS = ["switch", "sensor", "device_tracker"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up PAN Firewall from a config entry."""
     fw = panos.firewall.Firewall(
         hostname=entry.data[CONF_HOST],
         api_username=entry.data[CONF_USERNAME],
@@ -80,7 +79,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
@@ -88,8 +86,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 class PanFirewallCoordinator(DataUpdateCoordinator):
-    """Data update coordinator for PAN Firewall rules."""
-
     def __init__(self, hass: HomeAssistant, fw, vsys: str, scan_interval: int):
         super().__init__(
             hass,
@@ -102,58 +98,69 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
         self.rulebase = None
 
     async def _async_update_data(self):
-        """Fetch all security rules."""
-        def fetch_rules():
-            if self.rulebase is None:
-                self.rulebase = panos.policies.Rulebase()
-                self.fw.add(self.rulebase)
-            security_rules = panos.policies.SecurityRule.refreshall(self.rulebase)
-            nat_rules = panos.policies.NatRule.refreshall(self.rulebase)
-            decryption_rules = panos.policies.DecryptionRule.refreshall(self.rulebase)
-            return {
-                "security_rules": {rule.name: rule for rule in security_rules},
-                "nat_rules": {rule.name: rule for rule in nat_rules},
-                "decryption_rules": {rule.name: rule for rule in decryption_rules},
-            }
-
-        def fetch_dhcp_leases():
-            cmd = '<show><dhcp><server><lease><interface>all</interface></lease></server></dhcp></show>'
-            root = self.fw.op(cmd)
-            leases = []
-            for interface in root.findall(".//interface"):
-                iface_name = interface.get("name")
-                for entry in interface.findall(".//entry"):
-                    ip = entry.findtext("ip")
-                    mac = entry.findtext("mac")
-                    hostname = entry.findtext("hostname")
-                    state = entry.findtext("state")
-                    leasetime = entry.findtext("leasetime")
-                    if hostname and hostname.strip():
-                        leases.append({
-                            "ip": ip,
-                            "mac": mac or "unknown",
-                            "hostname": hostname.strip(),
-                            "state": state,
-                            "leasetime": leasetime or "unknown",
-                            "interface": iface_name,
-                        })
-            return leases
-
         def fetch_all():
             data = {}
 
+            # Unified rulebase for security / NAT / decryption counts
             try:
-                data.update(fetch_rules())
-            except Exception as err:
-                _LOGGER.error("Error fetching rules: %s", err)
+                if self.rulebase is None:
+                    self.rulebase = panos.policies.Rulebase()
+                    self.fw.add(self.rulebase)
+
+                # Load all rules
+                all_rules = panos.policies.Rule.refreshall(self.rulebase)
+
+                security_rules = {}
+                nat_rules = {}
+                decryption_rules = {}
+
+                for rule in all_rules:
+                    if isinstance(rule, panos.policies.SecurityRule):
+                        security_rules[rule.name] = rule
+                    elif isinstance(rule, panos.policies.NatRule):
+                        nat_rules[rule.name] = rule
+                    elif isinstance(rule, panos.policies.DecryptionRule):
+                        decryption_rules[rule.name] = rule
+
+                data["security_rules"] = security_rules
+                data["nat_rules"] = nat_rules
+                data["decryption_rules"] = decryption_rules
+
+                _LOGGER.info(f"Loaded {len(security_rules)} security, {len(nat_rules)} NAT, {len(decryption_rules)} decryption rules")
+            except Exception as e:
+                _LOGGER.error(f"Rulebase fetch failed: {e}")
                 data["security_rules"] = data["nat_rules"] = data["decryption_rules"] = {}
 
+            # DHCP leases – using exact XML string
             try:
-                data["dhcp_leases"] = fetch_dhcp_leases()
-            except Exception as err:
-                _LOGGER.error("Error fetching DHCP leases: %s", err)
+                cmd = '<show><dhcp><server><lease><interface>all</interface></lease></server></dhcp></show>'
+                root = self.fw.op(cmd)
+                leases = []
+                for interface in root.findall(".//interface"):
+                    iface_name = interface.get("name")
+                    for entry in interface.findall(".//entry"):
+                        ip = entry.findtext("ip")
+                        mac = entry.findtext("mac")
+                        hostname = entry.findtext("hostname")
+                        state = entry.findtext("state")
+                        leasetime = entry.findtext("leasetime")
+
+                        if hostname and hostname.strip():
+                            leases.append({
+                                "ip": ip,
+                                "mac": mac or "unknown",
+                                "hostname": hostname.strip(),
+                                "state": state,
+                                "leasetime": leasetime or "unknown",
+                                "interface": iface_name,
+                            })
+                data["dhcp_leases"] = leases
+                _LOGGER.info(f"Fetched {len(leases)} DHCP leases with hostname")
+            except Exception as e:
+                _LOGGER.error(f"DHCP leases fetch failed: {str(e)}")
                 data["dhcp_leases"] = []
 
+            # Other metrics (unchanged)
             try:
                 root = self.fw.op("show running resource-monitor second")
                 total_util = 0.0
