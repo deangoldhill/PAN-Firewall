@@ -2,7 +2,6 @@
 
 from datetime import timedelta
 import logging
-import xml.etree.ElementTree as ET
 import re
 
 from homeassistant.config_entries import ConfigEntry
@@ -52,7 +51,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         info = await hass.async_add_executor_job(refresh_system)
         serial = info["serial"]
-        _LOGGER.info("✅ Connected to PAN firewall %s (model: %s, version: %s)", serial, info["model"], info["version"])
+        _LOGGER.info("Connected to PAN firewall %s (model: %s, version: %s)", serial, info["model"], info["version"])
     except Exception as err:
         _LOGGER.warning("Could not fetch system info: %s", err)
         serial = entry.data[CONF_HOST]
@@ -118,20 +117,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error(f"Rulebase fetch failed: {e}")
                 data["security_rules"] = data["nat_rules"] = data["decryption_rules"] = {}
 
-            # DHCP Leases Total – using your confirmed XML string
-            try:
-                cmd = '<show><dhcp><server><lease><interface>all</interface></lease></server></dhcp></show>'
-                root = self.fw.op(cmd)
-                total = 0
-                for interface in root.findall(".//interface"):
-                    total += len(interface.findall(".//entry"))
-                data["dhcp_leases_total"] = total
-                _LOGGER.info(f"Fetched {total} total DHCP leases")
-            except Exception as e:
-                _LOGGER.error(f"DHCP leases fetch failed: {str(e)}")
-                data["dhcp_leases_total"] = 0
-
-            # Other metrics
+            # Dataplane CPU
             try:
                 root = self.fw.op("show running resource-monitor second")
                 total_util = 0.0
@@ -150,6 +136,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Dataplane CPU failed: %s", e)
                 data["dataplane_cpu"] = None
 
+            # System info
             try:
                 root = self.fw.op("show system info")
                 sys_dict = {}
@@ -162,6 +149,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("System info failed: %s", e)
                 data["system_info"] = {}
 
+            # Session info
             try:
                 root = self.fw.op("show session info")
                 data["concurrent_connections"] = int(root.findtext('.//num-active') or 0)
@@ -171,6 +159,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Session info failed: %s", e)
                 data["concurrent_connections"] = data["connections_per_second"] = data["total_throughput_kbps"] = 0
 
+            # Management CPU
             try:
                 root = self.fw.op("show system resources")
                 text = root.findtext('.') or ""
@@ -185,6 +174,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Management CPU failed: %s", e)
                 data["management_cpu"] = None
 
+            # Number of routes
             try:
                 root = self.fw.op("show routing route")
                 data["number_of_routes"] = len(root.findall('.//entry'))
