@@ -1,6 +1,6 @@
 """Sensor platform for PAN Firewall metrics."""
 
-from homeassistant.components.sensor import SensorEntity, SensorStateClass, SensorEntityDescription
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -21,7 +21,7 @@ async def async_setup_entry(
 
     entities = []
 
-    # Numeric / general metrics
+    # Numeric metrics
     metrics = {
         "dataplane_cpu": ("Dataplane CPU", "%", "percentage", SensorStateClass.MEASUREMENT),
         "management_cpu": ("Management CPU", "%", "percentage", SensorStateClass.MEASUREMENT),
@@ -47,7 +47,7 @@ async def async_setup_entry(
             )
         )
 
-    # New total rule count sensors
+    # Rule count sensors
     entities.extend([
         PanFirewallRuleCountSensor(
             coordinator=coordinator,
@@ -78,7 +78,7 @@ async def async_setup_entry(
         ),
     ])
 
-    # System info fields – filtered + special handling
+    # System info fields
     system_info = coordinator.data.get("system_info", {})
 
     always_include = {
@@ -99,7 +99,7 @@ async def async_setup_entry(
         "logdb_version": "LogDB Version",
         "operational_mode": "Operational Mode",
         "platform_family": "Platform Family",
-        "wildfire_rt": "Wildfire Realtime",  # renamed
+        "wildfire_rt": "Wildfire Realtime",
     }
 
     date_mappings = {
@@ -111,7 +111,6 @@ async def async_setup_entry(
         "global_protect_datafile_version": "global_protect_datafile_release_date",
     }
 
-    # VM-specific
     vm_specific = {
         "vm_cap_tier": "VM Capacity Tier",
         "vm_cores": "VM Cores",
@@ -126,11 +125,10 @@ async def async_setup_entry(
 
     for key, friendly_name in always_include.items():
         if key in system_info:
-            original_key = key
             entities.append(
                 PanFirewallSystemFieldSensor(
                     coordinator=coordinator,
-                    key=original_key,
+                    key=key,
                     name=friendly_name,
                     serial=serial,
                     model=model,
@@ -139,7 +137,6 @@ async def async_setup_entry(
                 )
             )
 
-    # VM-specific only when applicable
     if is_vm:
         for key, friendly_name in vm_specific.items():
             if key in system_info:
@@ -196,7 +193,7 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
 
 
 class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
-    """Sensor showing total count of a rule type."""
+    """Sensor for total number of rules of a specific type."""
 
     def __init__(self, coordinator, rule_type: str, name: str, serial, model, version, fw):
         super().__init__(coordinator)
@@ -212,12 +209,9 @@ class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        rules = self.coordinator.data.get("rules", {})
-        if self._rule_type == "security":
-            return len(rules)
-        # For NAT and Decryption - we would need to load them separately
-        # For simplicity we only count security for now - extend if needed
-        return 0  # placeholder - add NAT/Decryption loading if desired
+        key = f"{self._rule_type}_rules"
+        rules_dict = self.coordinator.data.get(key, {})
+        return len(rules_dict)
 
     @property
     def device_info(self):
@@ -241,7 +235,6 @@ class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
         self._attr_name = name
         self._attr_unique_id = f"pan_{serial}_sys_{key}"
 
-        # Diagnostic category for version-related sensors
         version_keys = {
             "app_version", "av_version", "threat_version", "wildfire_version",
             "device_dictionary_version", "global_protect_client_package_version",
@@ -258,9 +251,6 @@ class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         val = self.coordinator.data.get("system_info", {}).get(self._key)
-        # Special rename display
-        if self._key == "wildfire_rt":
-            return val  # value remains the same, name already changed
         return val
 
     @property
