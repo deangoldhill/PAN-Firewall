@@ -16,6 +16,7 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
+    hostname = data["hostname"]  # from coordinator setup
     model = data["model"]
     version = data["version"]
 
@@ -41,6 +42,7 @@ async def async_setup_entry(
                 device_class=device_class,
                 state_class=state_class,
                 serial=serial,
+                hostname=hostname,
                 model=model,
                 version=version,
                 fw=data["fw"],
@@ -49,9 +51,9 @@ async def async_setup_entry(
 
     # Rule count sensors
     entities.extend([
-        PanFirewallRuleCountSensor(coordinator, "security_rules", "Security Rules Total", serial, model, version, data["fw"]),
-        PanFirewallRuleCountSensor(coordinator, "nat_rules", "NAT Rules Total", serial, model, version, data["fw"]),
-        PanFirewallRuleCountSensor(coordinator, "decryption_rules", "Decryption Rules Total", serial, model, version, data["fw"]),
+        PanFirewallRuleCountSensor(coordinator, "security_rules", "Security Rules Total", serial, hostname, model, version, data["fw"]),
+        PanFirewallRuleCountSensor(coordinator, "nat_rules", "NAT Rules Total", serial, hostname, model, version, data["fw"]),
+        PanFirewallRuleCountSensor(coordinator, "decryption_rules", "Decryption Rules Total", serial, hostname, model, version, data["fw"]),
     ])
 
     # System info fields
@@ -98,6 +100,7 @@ async def async_setup_entry(
                     key=key,
                     name=friendly_name,
                     serial=serial,
+                    hostname=hostname,
                     model=model,
                     version=version,
                     fw=data["fw"],
@@ -113,6 +116,7 @@ async def async_setup_entry(
                         key=key,
                         name=friendly_name,
                         serial=serial,
+                        hostname=hostname,
                         model=model,
                         version=version,
                         fw=data["fw"],
@@ -123,7 +127,7 @@ async def async_setup_entry(
 
 
 class PanFirewallSensor(CoordinatorEntity, SensorEntity):
-    def __init__(self, coordinator, key: str, name: str, unit: str | None, device_class: str | None, state_class, serial, model, version, fw):
+    def __init__(self, coordinator, key: str, name: str, unit: str | None, device_class: str | None, state_class, serial, hostname, model, version, fw):
         super().__init__(coordinator)
         self._key = key
         self._attr_name = name
@@ -133,6 +137,7 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
         self._attr_state_class = state_class
         self._attr_icon = "mdi:shield"
         self._serial = serial
+        self._hostname = hostname
         self._model = model
         self._version = version
         self._fw = fw
@@ -148,7 +153,7 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         return dr.DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
-            name=f"PAN Firewall {self._serial}",
+            name=self._hostname,
             manufacturer="Palo Alto Networks",
             model=self._model,
             sw_version=self._version,
@@ -158,7 +163,7 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
 
 
 class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
-    def __init__(self, coordinator, rule_type: str, name: str, serial, model, version, fw):
+    def __init__(self, coordinator, rule_type: str, name: str, serial, hostname, model, version, fw):
         super().__init__(coordinator)
         self._rule_type = rule_type
         self._attr_name = name
@@ -166,6 +171,7 @@ class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
         self._attr_icon = "mdi:counter"
         self._attr_state_class = SensorStateClass.TOTAL
         self._serial = serial
+        self._hostname = hostname
         self._model = model
         self._version = version
         self._fw = fw
@@ -178,7 +184,7 @@ class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         return dr.DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
-            name=f"PAN Firewall {self._serial}",
+            name=self._hostname,
             manufacturer="Palo Alto Networks",
             model=self._model,
             sw_version=self._version,
@@ -188,7 +194,7 @@ class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
 
 
 class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
-    def __init__(self, coordinator, key: str, name: str, serial, model, version, fw):
+    def __init__(self, coordinator, key: str, name: str, serial, hostname, model, version, fw):
         super().__init__(coordinator)
         self._key = key
         self._attr_name = name
@@ -203,6 +209,7 @@ class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
 
         self._attr_icon = "mdi:information-outline" if self._attr_entity_category == EntityCategory.DIAGNOSTIC else "mdi:information"
         self._serial = serial
+        self._hostname = hostname
         self._model = model
         self._version = version
         self._fw = fw
@@ -236,7 +243,7 @@ class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         return dr.DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
-            name=f"PAN Firewall {self._serial}",
+            name=self._hostname,
             manufacturer="Palo Alto Networks",
             model=self._model,
             sw_version=self._version,
