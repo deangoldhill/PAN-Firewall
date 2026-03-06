@@ -11,6 +11,7 @@ from .const import DOMAIN
 async def async_setup_entry(
     hass: HomeAssistant, entry, async_add_entities: AddEntitiesCallback
 ):
+    """Set up device tracker entities from DHCP leases."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
