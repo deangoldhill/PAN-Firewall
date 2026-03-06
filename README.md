@@ -1,106 +1,75 @@
-# PAN-Firewall – Home Assistant Custom Integration
+# PAN Firewall - Home Assistant Custom Integration
 
-Control **Palo Alto Networks** (PAN-OS) firewall security, NAT and decryption rules directly from Home Assistant.
-
-Toggle rules on/off (with automatic commit), monitor firewall health metrics (CPU, sessions, throughput, routes, …), and get detailed system information.
-
-![PAN Firewall in Home Assistant](https://via.placeholder.com/800x400.png?text=PAN+Firewall+in+HA+Dashboard)  
-*(replace with your own screenshot when you have one)*
+Control Palo Alto Networks (PAN-OS) firewalls from Home Assistant.
 
 ## Features
 
-- **Rule control as switches**  
-  - Security rules  
-  - NAT rules  
-  - Decryption rules  
-  → All switches are **disabled by default** in the entity registry (enable manually if you want them visible/usable)
-
-- **Automatic commit** after every enable/disable action
-
-- **Health & performance sensors**  
-  - Dataplane CPU %  
-  - Management CPU %  
-  - Concurrent connections  
-  - Connections per second  
-  - Total throughput (Mbps)  
-  - Number of routes
-
-- **Detailed system information sensors** (most are diagnostic)  
-  - Hostname, IP, uptime, software version, app/av/threat/wildfire versions + release dates (as attributes)  
-  - VM-specific info (cores, memory, license, UUID, etc.) when platform-family = vm
-
-- **Rule count sensors**  
-  - Security Rules Total  
-  - NAT Rules Total  
+- **Security rule switches** (enable/disable + auto-commit)
+  - All switches are created **disabled by default** (enable manually in entity registry)
+- **Rule count sensors**
+  - Security Rules Total
+  - NAT Rules Total
   - Decryption Rules Total
-
-- Configurable polling interval (default 30 s, minimum 10 s)
-
-- Single device entity in Home Assistant with all switches & sensors grouped under it
-
-- Local polling only – no cloud dependency
+- **Performance sensors**
+  - Dataplane CPU (%)
+  - Management CPU (%)
+  - Concurrent Connections
+  - Connections per Second
+  - Total Throughput (Mbps)
+  - Number of Routes
+- **System information sensors** (mostly diagnostic)
+  - Hostname, IP, Time, Uptime, Model, Serial, Software Version, etc.
+  - Version sensors (App, AV, Threat, Wildfire, etc.) include release dates as attributes
+  - VM-specific sensors (when platform-family = vm): Cores, Memory, License, UUID, etc.
+- Configurable polling interval (default: 30 seconds, min: 10 seconds)
+- All entities grouped under one device
 
 ## Requirements
 
-- Home Assistant 2024.6 or newer (tested up to 2026.x)
-- PAN-OS firewall (tested on 12.1.4, should work on 10.x–12.x)
-- `pan-os-python` library (automatically installed via manifest)
+- Home Assistant 2024.6+
+- PAN-OS firewall (tested on 12.1.x)
+- API user with read/write permissions
 
 ## Installation
 
 ### Via HACS (recommended)
 
-1. **HACS → Integrations → Explore & Download Repositories** (or the three dots menu → Custom repositories)
-2. Add this repository URL:  
-   `https://github.com/YOURUSERNAME/pan-firewall`  
-   Category: **Integration**
-3. Search for **PAN Firewall** and install it
-4. Restart Home Assistant
-5. Go to **Settings → Devices & Services → Add Integration → PAN Firewall**
+1. HACS → Integrations → Custom repositories
+2. URL: `https://github.com/YOURUSERNAME/pan-firewall`  
+   Category: Integration
+3. Install → restart HA
+4. Add integration via **Settings → Devices & services → Add Integration → PAN Firewall**
 
-### Manual installation
+### Manual
 
-1. Download the latest release ZIP
-2. Copy the `custom_components/pan_firewall` folder to your HA `config/custom_components/` directory
-3. Restart Home Assistant
-4. Add the integration via the UI
+Copy `custom_components/pan_firewall` folder to `config/custom_components/`.
 
 ## Configuration
 
-Go to **Settings → Devices & Services → Add Integration → PAN Firewall**
-
 Fields:
 
-| Field              | Description                              | Default / Example          |
-|---------------------|------------------------------------------|----------------------------|
-| Host               | Firewall IP or hostname                  | 192.168.1.1               |
-| Port               | HTTPS port                               | 443                       |
-| Username           | API user with read/write privileges      | admin                     |
-| Password           | API password                             | —                         |
-| VSYS               | Virtual system (multi-vsys firewalls)    | vsys1                     |
-| Verify SSL         | Validate firewall certificate            | true                      |
-| Polling interval   | How often to refresh data (seconds)      | 30 (min 10)               |
+- Host / IP
+- Port (default 443)
+- Username
+- Password
+- VSYS (default: vsys1)
+- Verify SSL (default: true)
+- Polling interval (seconds, default: 30, min: 10)
 
-After setup you will see one device named **PAN Firewall [serial-number]** containing:
+After setup: one device "PAN Firewall [serial]" with all entities.
 
-- switches (all disabled by default)
-- performance sensors
-- rule count sensors
-- diagnostic system/version sensors
+## Usage Notes
 
-## Usage Tips
+- Rule switches are **disabled by default** → go to device → Entities tab → enable the ones you want to use
+- Toggling a switch disables/enables the rule and commits the config automatically
+- Version sensors are **diagnostic** → appear in the device's Diagnostics tab
 
-- **Enabling switches**  
-  All rule switches are **disabled by default** in the entity registry.  
-  Go to **Settings → Devices & Services → PAN Firewall → Entities** and enable the ones you want to use/control.
+## Troubleshooting
 
-- **Dashboard example**
+- Switches / counts missing → check logs for "Rulebase fetch failed"
+- Sensors 0 → verify API permissions (operational + configuration read)
+- Commit slow → normal on busy firewalls (sync=True waits for commit)
 
-```yaml
-type: entities
-entities:
-  - entity: switch.security_rule_block_tor
-  - entity: sensor.dataplane_cpu
-  - entity: sensor.concurrent_connections
-  - entity: sensor.total_throughput
-title: Firewall Controls
+## License
+
+MIT
