@@ -213,4 +213,74 @@ class PanFirewallDHCPLeasesSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return self.coordinator.data.get("dhcp_leases_total", 0
+        return self.coordinator.data.get("dhcp_leases_total", 0)
+
+    @property
+    def device_info(self):
+        return dr.DeviceInfo(
+            identifiers={(DOMAIN, self._serial)},
+            name=f"PAN Firewall {self._serial}",
+            manufacturer="Palo Alto Networks",
+            model=self._model,
+            sw_version=self._version,
+            configuration_url=f"https://{self._fw.hostname}",
+            entry_type=dr.DeviceEntryType.SERVICE,
+        )
+
+
+class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, key: str, name: str, serial, model, version, fw):
+        super().__init__(coordinator)
+        self._key = key
+        self._attr_name = name
+        self._attr_unique_id = f"pan_{serial}_sys_{key}"
+
+        version_keys = {
+            "app_version", "av_version", "threat_version", "wildfire_version",
+            "device_dictionary_version", "global_protect_client_package_version",
+            "logdb_version", "sw_version"
+        }
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC if self._key in version_keys else None
+
+        self._attr_icon = "mdi:information-outline" if self._attr_entity_category == EntityCategory.DIAGNOSTIC else "mdi:information"
+        self._serial = serial
+        self._model = model
+        self._version = version
+        self._fw = fw
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("system_info", {}).get(self._key)
+
+    @property
+    def extra_state_attributes(self):
+        attrs = {}
+        system_info = self.coordinator.data.get("system_info", {})
+
+        date_map = {
+            "wildfire_version": "wildfire_release_date",
+            "threat_version": "threat_release_date",
+            "app_version": "app_release_date",
+            "av_version": "av_release_date",
+            "device_dictionary_version": "device_dictionary_release_date",
+            "global_protect_datafile_version": "global_protect_datafile_release_date",
+        }
+
+        if self._key in date_map:
+            date_key = date_map[self._key]
+            if date_key in system_info:
+                attrs["release_date"] = system_info[date_key]
+
+        return attrs
+
+    @property
+    def device_info(self):
+        return dr.DeviceInfo(
+            identifiers={(DOMAIN, self._serial)},
+            name=f"PAN Firewall {self._serial}",
+            manufacturer="Palo Alto Networks",
+            model=self._model,
+            sw_version=self._version,
+            configuration_url=f"https://{self._fw.hostname}",
+            entry_type=dr.DeviceEntryType.SERVICE,
+        )
