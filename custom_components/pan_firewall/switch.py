@@ -12,7 +12,6 @@ from .const import DOMAIN
 async def async_setup_entry(
     hass: HomeAssistant, entry, async_add_entities: AddEntitiesCallback
 ):
-    """Set up the PAN Firewall switch platform."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
@@ -21,7 +20,6 @@ async def async_setup_entry(
 
     entities = []
 
-    # Only security rules as switches
     for rule_name in coordinator.data.get("security_rules", {}).keys():
         entities.append(
             PanFirewallRuleSwitch(
@@ -38,8 +36,6 @@ async def async_setup_entry(
 
 
 class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
-    """Representation of a PAN Firewall rule switch."""
-
     def __init__(self, coordinator, rule_name: str, fw, serial: str, model: str, version: str):
         super().__init__(coordinator)
         self._rule_name = rule_name
@@ -53,7 +49,7 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
         self._attr_icon = "mdi:shield-lock"
         self._attr_device_class = "switch"
         self._attr_has_entity_name = True
-        self._attr_entity_registry_enabled_default = False  # Disabled by default
+        self._attr_entity_registry_enabled_default = False   # Disabled by default
 
     @property
     def device_info(self):
