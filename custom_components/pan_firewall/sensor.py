@@ -54,7 +54,7 @@ async def async_setup_entry(
         PanFirewallRuleCountSensor(coordinator, "decryption_rules", "Decryption Rules Total", serial, model, version, data["fw"]),
     ])
 
-    # New DHCP Leases Total sensor
+    # DHCP Leases Total sensor
     entities.append(
         PanFirewallDHCPLeasesSensor(
             coordinator=coordinator,
@@ -135,8 +135,6 @@ async def async_setup_entry(
 
 
 class PanFirewallSensor(CoordinatorEntity, SensorEntity):
-    """Generic numeric sensor."""
-
     def __init__(self, coordinator, key: str, name: str, unit: str | None, device_class: str | None, state_class, serial, model, version, fw):
         super().__init__(coordinator)
         self._key = key
@@ -172,8 +170,6 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
 
 
 class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
-    """Sensor for total number of rules of a specific type."""
-
     def __init__(self, coordinator, rule_type: str, name: str, serial, model, version, fw):
         super().__init__(coordinator)
         self._rule_type = rule_type
@@ -204,7 +200,7 @@ class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
 
 
 class PanFirewallDHCPLeasesSensor(CoordinatorEntity, SensorEntity):
-    """Sensor showing total number of DHCP leases across all interfaces."""
+    """Total number of DHCP leases across all interfaces."""
 
     def __init__(self, coordinator, name: str, serial, model, version, fw):
         super().__init__(coordinator)
@@ -235,19 +231,15 @@ class PanFirewallDHCPLeasesSensor(CoordinatorEntity, SensorEntity):
 
 
 class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
-    """One sensor per selected system info field."""
-
     def __init__(self, coordinator, key: str, name: str, serial, model, version, fw):
         super().__init__(coordinator)
         self._key = key
         self._attr_name = name
         self._attr_unique_id = f"pan_{serial}_sys_{key}"
 
-        version_keys = {
-            "app_version", "av_version", "threat_version", "wildfire_version",
-            "device_dictionary_version", "global_protect_client_package_version",
-            "logdb_version", "sw_version"
-        }
+        version_keys = {"app_version", "av_version", "threat_version", "wildfire_version",
+                        "device_dictionary_version", "global_protect_client_package_version",
+                        "logdb_version", "sw_version"}
         self._attr_entity_category = EntityCategory.DIAGNOSTIC if self._key in version_keys else None
 
         self._attr_icon = "mdi:information-outline" if self._attr_entity_category == EntityCategory.DIAGNOSTIC else "mdi:information"
@@ -264,7 +256,6 @@ class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
     def extra_state_attributes(self):
         attrs = {}
         system_info = self.coordinator.data.get("system_info", {})
-
         date_map = {
             "wildfire_version": "wildfire_release_date",
             "threat_version": "threat_release_date",
@@ -273,12 +264,10 @@ class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
             "device_dictionary_version": "device_dictionary_release_date",
             "global_protect_datafile_version": "global_protect_datafile_release_date",
         }
-
         if self._key in date_map:
             date_key = date_map[self._key]
             if date_key in system_info:
                 attrs["release_date"] = system_info[date_key]
-
         return attrs
 
     @property
