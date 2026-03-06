@@ -12,6 +12,7 @@ from .const import DOMAIN
 async def async_setup_entry(
     hass: HomeAssistant, entry, async_add_entities: AddEntitiesCallback
 ):
+    """Set up PAN Firewall sensor platform."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
@@ -20,7 +21,7 @@ async def async_setup_entry(
 
     entities = []
 
-    # Numeric metrics (using string device_class for full compatibility)
+    # Numeric / general metrics
     metrics = {
         "dataplane_cpu": ("Dataplane CPU", "%", "percentage", SensorStateClass.MEASUREMENT),
         "management_cpu": ("Management CPU", "%", "percentage", SensorStateClass.MEASUREMENT),
@@ -47,24 +48,99 @@ async def async_setup_entry(
             )
         )
 
-    # One sensor for EVERY field from <show><system><info/></system></show>
-    for key in coordinator.data.get("system_info", {}):
-        entities.append(
-            PanFirewallSystemFieldSensor(
-                coordinator=coordinator,
-                key=key,
-                serial=serial,
-                model=model,
-                version=version,
-                fw=data["fw"],
+    # System info fields – filtered + special handling
+    system_info = coordinator.data.get("system_info", {})
+
+    # Always include these (core identity/info)
+    always_include = {
+        "hostname": "Hostname",
+        "ip_address": "IP Address",
+        "time": "Time",
+        "uptime": "Uptime",
+        "family": "Family",
+        "model": "Model",
+        "serial": "Serial",
+        "sw_version": "Software Version",
+        "app_version": "App Version",
+        "av_version": "Antivirus Version",
+        "threat_version": "Threat Version",
+        "wildfire_version": "Wildfire Version",
+        "device_dictionary_version": "Device Dictionary Version",
+        "global_protect_client_package_version": "GlobalProtect Client Package Version",
+        "logdb_version": "LogDB Version",
+        "operational_mode": "Operational Mode",
+        "platform_family": "Platform Family",
+    }
+
+    # Date mappings – moved to attributes
+    date_mappings = {
+        "app_version": ("app_release_date", "App Release Date"),
+        "av_version": ("av_release_date", "AV Release Date"),
+        "threat_version": ("threat_release_date", "Threat Release Date"),
+        "wildfire_version": ("wildfire_release_date", "Wildfire Release Date"),
+        "device_dictionary_version": ("device_dictionary_release_date", "Device Dictionary Release Date"),
+        "global_protect_datafile_version": ("global_protect_datafile_release_date", "GlobalProtect Datafile Release Date"),
+    }
+
+    # VM-specific sensors – conditional
+    vm_specific = {
+        "vm_cap_tier": "VM Capacity Tier",
+        "vm_cores": "VM Cores",
+        "vm_cpuid": "VM CPU ID",
+        "vm_license": "VM License",
+        "vm_mem": "VM Memory (KB)",
+        "vm_mode": "VM Mode",
+        "vm_uuid": "VM UUID",
+    }
+
+    is_vm = system_info.get("platform_family", "").lower() == "vm"
+
+    for key, friendly_name in always_include.items():
+        if key in system_info:
+            original_key = key
+            if key == "wildfire_rt":
+                friendly_name = "Wildfire Realtime"  # rename
+
+            entities.append(
+                PanFirewallSystemFieldSensor(
+                    coordinator=coordinator,
+                    key=original_key,
+                    name=friendly_name,
+                    serial=serial,
+                    model=model,
+                    version=version,
+                    fw=data["fw"],
+                )
             )
-        )
+
+    # Add date attributes to version sensors (no standalone date sensors)
+    for version_key, (date_key, date_name) in date_mappings.items():
+        if version_key in system_info and date_key in system_info:
+            # We don't create a new entity, but the attribute will be added in the entity's extra_state_attributes
+            # (handled in PanFirewallSystemFieldSensor)
+            pass
+
+    # VM-specific entities only if platform_family == "vm"
+    if is_vm:
+        for key, friendly_name in vm_specific.items():
+            if key in system_info:
+                entities.append(
+                    PanFirewallSystemFieldSensor(
+                        coordinator=coordinator,
+                        key=key,
+                        name=friendly_name,
+                        serial=serial,
+                        model=model,
+                        version=version,
+                        fw=data["fw"],
+                    )
+                )
 
     async_add_entities(entities, update_before_add=True)
 
 
 class PanFirewallSensor(CoordinatorEntity, SensorEntity):
-    """Generic numeric sensor (CPU, sessions, throughput, etc.)."""
+    """Generic numeric sensor."""
 
     def __init__(self, coordinator, key: str, name: str, unit: str | None, device_class: str | None, state_class, serial, model, version, fw):
         super().__init__(coordinator)
@@ -84,7 +160,7 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         val = self.coordinator.data.get(self._key)
         if self._key == "total_throughput_kbps" and val is not None:
-            return round(val / 1000, 1)  # Kbps → Mbps
+            return round(val / 1000, 1)  # kbps → Mbps
         return val
 
     @property
@@ -101,14 +177,14 @@ class PanFirewallSensor(CoordinatorEntity, SensorEntity):
 
 
 class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
-    """One sensor for each field returned by show system info."""
+    """One sensor per selected system info field."""
 
-    def __init__(self, coordinator, key: str, serial, model, version, fw):
+    def __init__(self, coordinator, key: str, name: str, serial, model, version, fw):
         super().__init__(coordinator)
         self._key = key
-        self._attr_name = key.replace('_', ' ').title()
+        self._attr_name = name
         self._attr_unique_id = f"pan_{serial}_sys_{key}"
-        self._attr_icon = "mdi:information"
+        self._attr_icon = "mdi:information-outline"
         self._serial = serial
         self._model = model
         self._version = version
@@ -117,6 +193,28 @@ class PanFirewallSystemFieldSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         return self.coordinator.data.get("system_info", {}).get(self._key)
+
+    @property
+    def extra_state_attributes(self):
+        """Add release dates as attributes to version sensors."""
+        attrs = {}
+        system_info = self.coordinator.data.get("system_info", {})
+
+        date_map = {
+            "wildfire_version": "wildfire_release_date",
+            "threat_version": "threat_release_date",
+            "app_version": "app_release_date",
+            "av_version": "av_release_date",
+            "device_dictionary_version": "device_dictionary_release_date",
+            "global_protect_datafile_version": "global_protect_datafile_release_date",
+        }
+
+        if self._key in date_map:
+            date_key = date_map[self._key]
+            if date_key in system_info:
+                attrs["release_date"] = system_info[date_key]
+
+        return attrs
 
     @property
     def device_info(self):
