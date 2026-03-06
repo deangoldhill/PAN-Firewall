@@ -12,6 +12,7 @@ from .const import DOMAIN
 async def async_setup_entry(
     hass: HomeAssistant, entry, async_add_entities: AddEntitiesCallback
 ):
+    """Set up the PAN Firewall switch platform."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
@@ -20,7 +21,7 @@ async def async_setup_entry(
 
     entities = []
 
-    # Only create switches for security rules
+    # Only security rules as switches
     for rule_name in coordinator.data.get("security_rules", {}).keys():
         entities.append(
             PanFirewallRuleSwitch(
@@ -78,7 +79,6 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
         await self._set_disabled(True)
 
     async def _set_disabled(self, disabled: bool):
-        """Set disabled state and commit."""
         def set_and_commit():
             rule = self.coordinator.data.get("security_rules", {}).get(self._rule_name)
             if rule is None:
