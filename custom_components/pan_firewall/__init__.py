@@ -29,7 +29,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["switch", "sensor"]
+PLATFORMS = ["switch", "sensor", "device_tracker"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -114,10 +114,10 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Security rules fetch failed: %s", e)
                 data["security_rules"] = {}
 
-            # NAT rules (for count only)
+            # NAT rules (count only)
             try:
                 if self.nat_rulebase is None:
-                    self.nat_rulebase = panos.policies.Rulebase()
+                    self.nat_rulebase = panos.policies.NatRulebase()
                     self.fw.add(self.nat_rulebase)
                 nat_rules = panos.policies.NatRule.refreshall(self.nat_rulebase)
                 data["nat_rules"] = {rule.name: rule for rule in nat_rules}
@@ -125,10 +125,10 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("NAT rules fetch failed: %s", e)
                 data["nat_rules"] = {}
 
-            # Decryption rules (for count only)
+            # Decryption rules (count only)
             try:
                 if self.decryption_rulebase is None:
-                    self.decryption_rulebase = panos.policies.Rulebase()
+                    self.decryption_rulebase = panos.policies.DecryptionRulebase()
                     self.fw.add(self.decryption_rulebase)
                 decryption_rules = panos.policies.DecryptionRule.refreshall(self.decryption_rulebase)
                 data["decryption_rules"] = {rule.name: rule for rule in decryption_rules}
@@ -136,7 +136,35 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Decryption rules fetch failed: %s", e)
                 data["decryption_rules"] = {}
 
-            # Other metrics (unchanged)
+            # DHCP leases – only entries with hostname
+            try:
+                root = self.fw.op("<show><dhcp><server><lease><interface>all</interface></lease></server></dhcp></show>")
+                leases = []
+                for interface in root.findall(".//interface"):
+                    iface_name = interface.get("name")
+                    for entry in interface.findall(".//entry"):
+                        ip = entry.findtext("ip")
+                        mac = entry.findtext("mac")
+                        hostname = entry.findtext("hostname")
+                        state = entry.findtext("state")
+                        leasetime = entry.findtext("leasetime")
+
+                        if hostname and hostname.strip():
+                            leases.append({
+                                "ip": ip,
+                                "mac": mac or "unknown",
+                                "hostname": hostname.strip(),
+                                "state": state,
+                                "leasetime": leasetime or "unknown",
+                                "interface": iface_name,
+                            })
+                data["dhcp_leases"] = leases
+                _LOGGER.info(f"Fetched {len(leases)} DHCP leases with hostname")
+            except Exception as e:
+                _LOGGER.error(f"DHCP leases fetch failed: {e}")
+                data["dhcp_leases"] = []
+
+            # Other metrics
             try:
                 root = self.fw.op("show running resource-monitor second")
                 total_util = 0.0
