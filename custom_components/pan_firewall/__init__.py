@@ -3,6 +3,8 @@
 from datetime import timedelta
 import logging
 
+import xml.etree.ElementTree as ET
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
