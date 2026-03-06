@@ -52,7 +52,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         info = await hass.async_add_executor_job(refresh_system)
         serial = info["serial"]
-        _LOGGER.info("Connected to PAN firewall %s (model: %s, version: %s)", serial, info["model"], info["version"])
+        _LOGGER.info("✅ Connected to PAN firewall %s (model: %s, version: %s)", serial, info["model"], info["version"])
     except Exception as err:
         _LOGGER.warning("Could not fetch system info: %s", err)
         serial = entry.data[CONF_HOST]
@@ -86,8 +86,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 class PanFirewallCoordinator(DataUpdateCoordinator):
-    """Coordinator that fetches all rule types and metrics."""
-
     def __init__(self, hass: HomeAssistant, fw, vsys: str, scan_interval: int):
         super().__init__(
             hass,
@@ -116,10 +114,10 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Security rules fetch failed: %s", e)
                 data["security_rules"] = {}
 
-            # NAT rules
+            # NAT rules (for count only)
             try:
                 if self.nat_rulebase is None:
-                    self.nat_rulebase = panos.policies.NatRulebase()
+                    self.nat_rulebase = panos.policies.Rulebase()
                     self.fw.add(self.nat_rulebase)
                 nat_rules = panos.policies.NatRule.refreshall(self.nat_rulebase)
                 data["nat_rules"] = {rule.name: rule for rule in nat_rules}
@@ -127,10 +125,10 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("NAT rules fetch failed: %s", e)
                 data["nat_rules"] = {}
 
-            # Decryption rules
+            # Decryption rules (for count only)
             try:
                 if self.decryption_rulebase is None:
-                    self.decryption_rulebase = panos.policies.DecryptionRulebase()
+                    self.decryption_rulebase = panos.policies.Rulebase()
                     self.fw.add(self.decryption_rulebase)
                 decryption_rules = panos.policies.DecryptionRule.refreshall(self.decryption_rulebase)
                 data["decryption_rules"] = {rule.name: rule for rule in decryption_rules}
@@ -138,7 +136,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Decryption rules fetch failed: %s", e)
                 data["decryption_rules"] = {}
 
-            # Other metrics (unchanged from previous working version)
+            # Other metrics (unchanged)
             try:
                 root = self.fw.op("show running resource-monitor second")
                 total_util = 0.0
