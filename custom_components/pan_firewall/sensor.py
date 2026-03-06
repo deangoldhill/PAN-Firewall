@@ -49,34 +49,22 @@ async def async_setup_entry(
 
     # Rule count sensors
     entities.extend([
-        PanFirewallRuleCountSensor(
-            coordinator=coordinator,
-            rule_type="security_rules",
-            name="Security Rules Total",
-            serial=serial,
-            model=model,
-            version=version,
-            fw=data["fw"],
-        ),
-        PanFirewallRuleCountSensor(
-            coordinator=coordinator,
-            rule_type="nat_rules",
-            name="NAT Rules Total",
-            serial=serial,
-            model=model,
-            version=version,
-            fw=data["fw"],
-        ),
-        PanFirewallRuleCountSensor(
-            coordinator=coordinator,
-            rule_type="decryption_rules",
-            name="Decryption Rules Total",
-            serial=serial,
-            model=model,
-            version=version,
-            fw=data["fw"],
-        ),
+        PanFirewallRuleCountSensor(coordinator, "security_rules", "Security Rules Total", serial, model, version, data["fw"]),
+        PanFirewallRuleCountSensor(coordinator, "nat_rules", "NAT Rules Total", serial, model, version, data["fw"]),
+        PanFirewallRuleCountSensor(coordinator, "decryption_rules", "Decryption Rules Total", serial, model, version, data["fw"]),
     ])
+
+    # New DHCP Leases Total sensor
+    entities.append(
+        PanFirewallDHCPLeasesSensor(
+            coordinator=coordinator,
+            name="DHCP Leases Total",
+            serial=serial,
+            model=model,
+            version=version,
+            fw=data["fw"],
+        )
+    )
 
     # System info fields
     system_info = coordinator.data.get("system_info", {})
@@ -100,15 +88,6 @@ async def async_setup_entry(
         "operational_mode": "Operational Mode",
         "platform_family": "Platform Family",
         "wildfire_rt": "Wildfire Realtime",
-    }
-
-    date_mappings = {
-        "app_version": "app_release_date",
-        "av_version": "av_release_date",
-        "threat_version": "threat_release_date",
-        "wildfire_version": "wildfire_release_date",
-        "device_dictionary_version": "device_dictionary_release_date",
-        "global_protect_datafile_version": "global_protect_datafile_release_date",
     }
 
     vm_specific = {
@@ -210,6 +189,37 @@ class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         return len(self.coordinator.data.get(self._rule_type, {}))
+
+    @property
+    def device_info(self):
+        return dr.DeviceInfo(
+            identifiers={(DOMAIN, self._serial)},
+            name=f"PAN Firewall {self._serial}",
+            manufacturer="Palo Alto Networks",
+            model=self._model,
+            sw_version=self._version,
+            configuration_url=f"https://{self._fw.hostname}",
+            entry_type=dr.DeviceEntryType.SERVICE,
+        )
+
+
+class PanFirewallDHCPLeasesSensor(CoordinatorEntity, SensorEntity):
+    """Sensor showing total number of DHCP leases across all interfaces."""
+
+    def __init__(self, coordinator, name: str, serial, model, version, fw):
+        super().__init__(coordinator)
+        self._attr_name = name
+        self._attr_unique_id = f"pan_{serial}_dhcp_leases_total"
+        self._attr_icon = "mdi:counter"
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._serial = serial
+        self._model = model
+        self._version = version
+        self._fw = fw
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("dhcp_leases_total", 0)
 
     @property
     def device_info(self):
