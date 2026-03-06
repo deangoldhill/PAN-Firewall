@@ -29,10 +29,11 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["switch", "sensor", "device_tracker"]
+PLATFORMS = ["switch", "sensor"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up PAN Firewall from a config entry."""
     fw = panos.firewall.Firewall(
         hostname=entry.data[CONF_HOST],
         api_username=entry.data[CONF_USERNAME],
@@ -86,6 +87,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 class PanFirewallCoordinator(DataUpdateCoordinator):
+    """Data update coordinator for PAN Firewall rules and metrics."""
+
     def __init__(self, hass: HomeAssistant, fw, vsys: str, scan_interval: int):
         super().__init__(
             hass,
@@ -107,7 +110,6 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                     self.rulebase = panos.policies.Rulebase()
                     self.fw.add(self.rulebase)
 
-                # Load all rules
                 all_rules = panos.policies.Rule.refreshall(self.rulebase)
 
                 security_rules = {}
@@ -131,36 +133,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error(f"Rulebase fetch failed: {e}")
                 data["security_rules"] = data["nat_rules"] = data["decryption_rules"] = {}
 
-            # DHCP leases – using exact XML string
-            try:
-                cmd = '<show><dhcp><server><lease><interface>all</interface></lease></server></dhcp></show>'
-                root = self.fw.op(cmd)
-                leases = []
-                for interface in root.findall(".//interface"):
-                    iface_name = interface.get("name")
-                    for entry in interface.findall(".//entry"):
-                        ip = entry.findtext("ip")
-                        mac = entry.findtext("mac")
-                        hostname = entry.findtext("hostname")
-                        state = entry.findtext("state")
-                        leasetime = entry.findtext("leasetime")
-
-                        if hostname and hostname.strip():
-                            leases.append({
-                                "ip": ip,
-                                "mac": mac or "unknown",
-                                "hostname": hostname.strip(),
-                                "state": state,
-                                "leasetime": leasetime or "unknown",
-                                "interface": iface_name,
-                            })
-                data["dhcp_leases"] = leases
-                _LOGGER.info(f"Fetched {len(leases)} DHCP leases with hostname")
-            except Exception as e:
-                _LOGGER.error(f"DHCP leases fetch failed: {str(e)}")
-                data["dhcp_leases"] = []
-
-            # Other metrics (unchanged)
+            # Dataplane CPU
             try:
                 root = self.fw.op("show running resource-monitor second")
                 total_util = 0.0
@@ -179,6 +152,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Dataplane CPU failed: %s", e)
                 data["dataplane_cpu"] = None
 
+            # System info
             try:
                 root = self.fw.op("show system info")
                 sys_dict = {}
@@ -191,6 +165,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("System info failed: %s", e)
                 data["system_info"] = {}
 
+            # Session info
             try:
                 root = self.fw.op("show session info")
                 data["concurrent_connections"] = int(root.findtext('.//num-active') or 0)
@@ -200,6 +175,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Session info failed: %s", e)
                 data["concurrent_connections"] = data["connections_per_second"] = data["total_throughput_kbps"] = 0
 
+            # Management CPU
             try:
                 root = self.fw.op("show system resources")
                 text = root.findtext('.') or ""
@@ -214,6 +190,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Management CPU failed: %s", e)
                 data["management_cpu"] = None
 
+            # Number of routes
             try:
                 root = self.fw.op("show routing route")
                 data["number_of_routes"] = len(root.findall('.//entry'))
