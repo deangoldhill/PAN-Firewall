@@ -101,39 +101,27 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
         def fetch_all():
             data = {}
 
-            # Rules (security / NAT / decryption counts)
+            # Security / NAT / Decryption rule counts
             try:
                 if self.rulebase is None:
                     self.rulebase = panos.policies.Rulebase()
                     self.fw.add(self.rulebase)
 
-                all_rules = panos.policies.Rule.refreshall(self.rulebase)
+                security = panos.policies.SecurityRule.refreshall(self.rulebase)
+                nat = panos.policies.NatRule.refreshall(self.rulebase)
+                decryption = panos.policies.DecryptionRule.refreshall(self.rulebase)
 
-                security_rules = {}
-                nat_rules = {}
-                decryption_rules = {}
-
-                for rule in all_rules:
-                    if isinstance(rule, panos.policies.SecurityRule):
-                        security_rules[rule.name] = rule
-                    elif isinstance(rule, panos.policies.NatRule):
-                        nat_rules[rule.name] = rule
-                    elif isinstance(rule, panos.policies.DecryptionRule):
-                        decryption_rules[rule.name] = rule
-
-                data["security_rules"] = security_rules
-                data["nat_rules"] = nat_rules
-                data["decryption_rules"] = decryption_rules
+                data["security_rules"] = {r.name: r for r in security}
+                data["nat_rules"] = {r.name: r for r in nat}
+                data["decryption_rules"] = {r.name: r for r in decryption}
             except Exception as e:
                 _LOGGER.error(f"Rulebase fetch failed: {e}")
                 data["security_rules"] = data["nat_rules"] = data["decryption_rules"] = {}
 
-            # DHCP Leases Total – using exact raw XML you confirmed
+            # DHCP Leases Total – using your confirmed XML string
             try:
-                xml_cmd = '<show><dhcp><server><lease><interface>all</interface></lease></server></dhcp></show>'
-                response = self.fw.xml_op(xml_cmd)          # <-- raw XML, no conversion
-                root = ET.fromstring(response)
-
+                cmd = '<show><dhcp><server><lease><interface>all</interface></lease></server></dhcp></show>'
+                root = self.fw.op(cmd)
                 total = 0
                 for interface in root.findall(".//interface"):
                     total += len(interface.findall(".//entry"))
@@ -143,7 +131,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error(f"DHCP leases fetch failed: {str(e)}")
                 data["dhcp_leases_total"] = 0
 
-            # Other metrics (unchanged)
+            # Other metrics
             try:
                 root = self.fw.op("show running resource-monitor second")
                 total_util = 0.0
