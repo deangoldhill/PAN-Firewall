@@ -11,7 +11,6 @@ from .const import DOMAIN
 async def async_setup_entry(
     hass: HomeAssistant, entry, async_add_entities: AddEntitiesCallback
 ):
-    """Set up device tracker entities from DHCP leases."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
@@ -45,7 +44,6 @@ class PanFirewallDHCPDeviceTracker(CoordinatorEntity, ScannerEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return true if the device is considered at home (active lease)."""
         return self._lease["state"] == "committed"
 
     @property
