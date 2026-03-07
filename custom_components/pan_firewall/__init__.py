@@ -28,7 +28,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["switch", "sensor"]
+PLATFORMS = ["switch", "sensor", "binary_sensor", "button"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -53,9 +53,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         info = await hass.async_add_executor_job(refresh_system)
         serial = info["serial"]
         hostname = info["hostname"]
-        _LOGGER.info("Connected to PAN firewall %s (hostname: %s, model: %s, version: %s)", serial, hostname, info["model"], info["version"])
+        _LOGGER.info("✅ Connected to PAN firewall %s (hostname: %s)", serial, hostname)
     except Exception as err:
-        _LOGGER.warning("Could not fetch system info: %s - using fallback", err)
+        _LOGGER.warning("Could not fetch system info: %s", err)
         serial = entry.data[CONF_HOST]
         hostname = entry.data[CONF_HOST]
         info = {"model": "PAN-OS Firewall", "version": "Unknown"}
@@ -77,8 +77,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "version": info["version"],
     }
 
-    # Update entry title to hostname
-    hass.config_entries.async_update_entry(entry, title=f"{hostname}")
+    # Update device title to hostname
+    hass.config_entries.async_update_entry(entry, title=hostname)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -107,7 +107,7 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
         def fetch_all():
             data = {}
 
-            # Security / NAT / Decryption rule counts
+            # Rules
             try:
                 if self.rulebase is None:
                     self.rulebase = panos.policies.Rulebase()
@@ -124,7 +124,16 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error(f"Rulebase fetch failed: {e}")
                 data["security_rules"] = data["nat_rules"] = data["decryption_rules"] = {}
 
-            # Dataplane CPU
+            # Commit pending status
+            try:
+                root = self.fw.op("<check><pending-changes></pending-changes></check>")
+                pending_text = root.findtext(".") or "yes"
+                data["commit_pending"] = pending_text.lower() == "no"  # True = pending changes
+            except Exception as e:
+                _LOGGER.error(f"Pending changes check failed: {e}")
+                data["commit_pending"] = False
+
+            # Other metrics (unchanged)
             try:
                 root = self.fw.op("show running resource-monitor second")
                 total_util = 0.0
@@ -143,7 +152,6 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Dataplane CPU failed: %s", e)
                 data["dataplane_cpu"] = None
 
-            # System info
             try:
                 root = self.fw.op("show system info")
                 sys_dict = {}
@@ -156,7 +164,6 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("System info failed: %s", e)
                 data["system_info"] = {}
 
-            # Session info
             try:
                 root = self.fw.op("show session info")
                 data["concurrent_connections"] = int(root.findtext('.//num-active') or 0)
@@ -166,7 +173,6 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Session info failed: %s", e)
                 data["concurrent_connections"] = data["connections_per_second"] = data["total_throughput_kbps"] = 0
 
-            # Management CPU
             try:
                 root = self.fw.op("show system resources")
                 text = root.findtext('.') or ""
@@ -181,7 +187,6 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Management CPU failed: %s", e)
                 data["management_cpu"] = None
 
-            # Number of routes
             try:
                 root = self.fw.op("show routing route")
                 data["number_of_routes"] = len(root.findall('.//entry'))
