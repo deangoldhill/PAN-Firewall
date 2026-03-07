@@ -15,7 +15,7 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
-    hostname = data["hostname"]  # from coordinator setup
+    hostname = data["hostname"]
     model = data["model"]
     version = data["version"]
 
@@ -58,7 +58,7 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
     def device_info(self):
         return dr.DeviceInfo(
             identifiers={(DOMAIN, self._serial)},
-            name=self._hostname,  # Use hostname as device name
+            name=self._hostname,
             manufacturer="Palo Alto Networks",
             model=self._model,
             sw_version=self._version,
@@ -78,13 +78,15 @@ class PanFirewallRuleSwitch(CoordinatorEntity, SwitchEntity):
         await self._set_disabled(True)
 
     async def _set_disabled(self, disabled: bool):
+        """Enable/disable the rule and commit the configuration."""
         def set_and_commit():
             rule = self.coordinator.data.get("security_rules", {}).get(self._rule_name)
             if rule is None:
-                raise ValueError(f"Rule {self._rule_name} not found")
+                raise ValueError(f"Rule '{self._rule_name}' not found")
+
             rule.disabled = disabled
-            rule.update()
-            self._fw.commit(sync=True)
+            rule.apply()               # ← This is the correct method to update the rule object
+            self._fw.commit(sync=True) # Commit immediately
             return True
 
         await self.hass.async_add_executor_job(set_and_commit)
