@@ -16,7 +16,7 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
     serial = data["serial"]
-    hostname = data["hostname"]  # from coordinator setup
+    hostname = data["hostname"]
     model = data["model"]
     version = data["version"]
 
@@ -55,6 +55,19 @@ async def async_setup_entry(
         PanFirewallRuleCountSensor(coordinator, "nat_rules", "NAT Rules Total", serial, hostname, model, version, data["fw"]),
         PanFirewallRuleCountSensor(coordinator, "decryption_rules", "Decryption Rules Total", serial, hostname, model, version, data["fw"]),
     ])
+
+    # Commit Pending sensor (shows yes or no)
+    entities.append(
+        PanFirewallCommitPendingSensor(
+            coordinator=coordinator,
+            name="Commit Pending",
+            serial=serial,
+            hostname=hostname,
+            model=model,
+            version=version,
+            fw=data["fw"],
+        )
+    )
 
     # System info fields
     system_info = coordinator.data.get("system_info", {})
@@ -179,6 +192,37 @@ class PanFirewallRuleCountSensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         return len(self.coordinator.data.get(self._rule_type, {}))
+
+    @property
+    def device_info(self):
+        return dr.DeviceInfo(
+            identifiers={(DOMAIN, self._serial)},
+            name=self._hostname,
+            manufacturer="Palo Alto Networks",
+            model=self._model,
+            sw_version=self._version,
+            configuration_url=f"https://{self._fw.hostname}",
+            entry_type=dr.DeviceEntryType.SERVICE,
+        )
+
+
+class PanFirewallCommitPendingSensor(CoordinatorEntity, SensorEntity):
+    """Shows exactly 'yes' or 'no' from the firewall."""
+
+    def __init__(self, coordinator, name: str, serial, hostname, model, version, fw):
+        super().__init__(coordinator)
+        self._attr_name = name
+        self._attr_unique_id = f"pan_{serial}_commit_pending"
+        self._attr_icon = "mdi:git"
+        self._serial = serial
+        self._hostname = hostname
+        self._model = model
+        self._version = version
+        self._fw = fw
+
+    @property
+    def native_value(self):
+        return self.coordinator.data.get("commit_pending", "unknown")
 
     @property
     def device_info(self):
