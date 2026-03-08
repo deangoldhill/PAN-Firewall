@@ -28,7 +28,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["switch", "sensor", "binary_sensor", "button"]
+PLATFORMS = ["switch", "sensor", "button"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -77,7 +77,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "version": info["version"],
     }
 
-    # Update device title to hostname
     hass.config_entries.async_update_entry(entry, title=hostname)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -124,16 +123,18 @@ class PanFirewallCoordinator(DataUpdateCoordinator):
                 _LOGGER.error(f"Rulebase fetch failed: {e}")
                 data["security_rules"] = data["nat_rules"] = data["decryption_rules"] = {}
 
-            # Commit pending status
+            # Commit pending status (exact command you gave)
             try:
                 root = self.fw.op("<check><pending-changes></pending-changes></check>")
-                pending_text = root.findtext(".") or "yes"
-                data["commit_pending"] = pending_text.lower() == "no"  # True = pending changes
+                pending_text = root.findtext(".") or root.findtext(".//") or "yes"
+                pending_text = pending_text.strip().lower()
+                data["commit_pending"] = pending_text
+                _LOGGER.info(f"Commit pending status: {pending_text}")
             except Exception as e:
                 _LOGGER.error(f"Pending changes check failed: {e}")
-                data["commit_pending"] = False
+                data["commit_pending"] = "unknown"
 
-            # Other metrics (unchanged)
+            # Other metrics
             try:
                 root = self.fw.op("show running resource-monitor second")
                 total_util = 0.0
